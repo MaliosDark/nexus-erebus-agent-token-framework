@@ -1,0 +1,6 @@
+agent-twitter-client/
+node_modules/
+*.env
+cookies.json
+memory-*.json
+users.json

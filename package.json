@@ -1,0 +1,44 @@
+{
+  "name": "nexus-erebus-agent-token-framework",
+  "version": "2.4.0",
+  "description": "Autonomous Solana agents that interact via Twitter/Telegram, powered by Ollama and NXR token mechanics.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node ensure-deps.js && node check-env.js && node index.js",
+    "check": "node check-env.js",
+    "dev": "NODE_ENV=development node index.js"
+  },
+  "keywords": [
+    "solana",
+    "nxr",
+    "nexus",
+    "erebus",
+    "bot",
+    "telegram",
+    "twitter",
+    "crypto",
+    "agent",
+    "trading",
+    "ollama"
+  ],
+  "author": {
+    "name": "Andryu Schittone",
+    "email": "malios666@gmail.com",
+    "url": "https://github.com/MaliosDark"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.2",
+    "agent-twitter-client": "file:agent-twitter-client",
+    "dotenv": "^16.5.0",
+    "lodash": "^4.17.21",
+    "lodash-id": "^0.14.1",
+    "lowdb": "^5.1.0",
+    "nanoid": "^5.1.5",
+    "node-fetch": "^3.3.2",
+    "telegraf": "^4.16.3",
+    "tough-cookie": "^5.1.2"
+  }
+}

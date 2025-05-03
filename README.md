@@ -4,18 +4,46 @@
 </p>
 
 <p align="center">
-  <!-- core repo stats -->
-  <img src="https://img.shields.io/github/stars/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&color=gold" />
-  <img src="https://img.shields.io/github/forks/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge" />
-  <img src="https://img.shields.io/github/issues/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&color=informational" />
-  <img src="https://img.shields.io/github/license/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&color=success" />
-  <!-- ecosystem -->
-  <img src="https://img.shields.io/badge/solana-mainnet-14f195?style=for-the-badge&logo=solana&logoColor=white" />
-  <img src="https://img.shields.io/badge/telegram-bot-blue?style=for-the-badge&logo=telegram" />
-  <img src="https://img.shields.io/badge/twitter-agent-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" />
-  <!-- visitors -->
-  <img src="https://visitcount.itsvg.in/api?id=nexus-erebus-agent-token-framework&icon=6&color=12&style=for-the-badge" />
+  <!-- GitHub stats -->
+  <a href="https://github.com/MaliosDark/nexus-erebus-agent-token-framework/stargazers">
+    <img alt="Stars"
+         src="https://img.shields.io/github/stars/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&logo=github" />
+  </a>
+  <a href="https://github.com/MaliosDark/nexus-erebus-agent-token-framework/network/members">
+    <img alt="Forks"
+         src="https://img.shields.io/github/forks/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&logo=github" />
+  </a>
+  <a href="https://github.com/MaliosDark/nexus-erebus-agent-token-framework/issues">
+    <img alt="Open Issues"
+         src="https://img.shields.io/github/issues/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&color=informational" />
+  </a>
+  <a href="https://github.com/MaliosDark/nexus-erebus-agent-token-framework/blob/main/LICENSE">
+    <img alt="License"
+         src="https://img.shields.io/github/license/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge&color=success" />
+  </a>
+  <a href="https://github.com/MaliosDark/nexus-erebus-agent-token-framework/commits/main">
+    <img alt="Last Commit"
+         src="https://img.shields.io/github/last-commit/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge" />
+  </a>
+  <a href="https://komarev.com/ghpvc/?username=MaliosDark&repo=nexus-erebus-agent-token-framework">
+    <img alt="Repo views"
+         src="https://komarev.com/ghpvc/?username=MaliosDark&repo=nexus-erebus-agent-token-framework&style=for-the-badge&color=brightgreen" />
+  </a>
+
+  <!-- Tech / ecosystem -->
+  <br/>
+  <img alt="Solana"
+       src="https://img.shields.io/badge/Solana-mainnet%20beta-14f195?style=for-the-badge&logo=solana&logoColor=white" />
+  <img alt="Telegram bot"
+       src="https://img.shields.io/badge/Telegram-bot-blue?style=for-the-badge&logo=telegram" />
+  <img alt="Twitter agent"
+       src="https://img.shields.io/badge/Twitter-agent-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" />
+  <img alt="Languages count"
+       src="https://img.shields.io/github/languages/count/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge" />
+  <img alt="Top language"
+       src="https://img.shields.io/github/languages/top/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge" />
 </p>
+
 
 ---
 

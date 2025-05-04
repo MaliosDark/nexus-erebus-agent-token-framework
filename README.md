@@ -124,50 +124,61 @@
 ---
 
 
-## 🏗 Architecture Overview — improved
+## 🏗 Architecture Overview 
 
 ```mermaid
-graph LR
-  %% ───── user side ─────
-  subgraph User Space
-    TG(Telegram User)
-    TW(Twitter User)
-    GFX(  Grafana )
+flowchart LR
+  %% ─── user side ───
+  subgraph Users
+    TG("Telegram\nUser")
+    TW("Twitter\nUser")
+    GFX(Grafana)
   end
 
-  %% ───── core process ─────
-  subgraph Agent Process
-    AGENT[Nexus Erebus<br/>API + Telegraf]
-    QUEUE[BullMQ<br/>Queues]
-    METRICS[/Prometheus<br/>/metrics/]
-    FW[Bubble Firewall<br/>HP Monitor]
+  %% ─── core process ───
+  subgraph Agent
+    AGENT("Nexus Erebus\nAPI + Telegraf")
+    QUEUE("BullMQ Queues")
+    METRICS("/metrics\n(Prometheus)")
+    FW("Bubble Firewall\nHP Monitor")
   end
 
-  %% ───── workers ─────
-  subgraph Background Workers
-    WORKER[Trade / LLM Worker]
+  %% ─── workers ───
+  subgraph Workers
+    WORKER("Trade / LLM Worker")
   end
 
-  %% ───── external services ─────
-  subgraph On‑chain & AI
-    RPC[(Solana RPC)]
-    JUP[Jupiter API]
-    LLM[(Ollama LLM)]
+  %% ─── external services ───
+  subgraph External
+    RPC("Solana RPC")
+    JUP("Jupiter API")
+    LLM("Ollama LLM")
   end
 
-  %% ───── flows ─────
-  TG -- CMD / buttons --> AGENT
-  TW -- @mention tweet --> AGENT
-  AGENT -- enqueue --> QUEUE
-  QUEUE -- fetch job --> WORKER
-  WORKER -- swap + burn --> RPC
-  WORKER -- route quote --> JUP
-  WORKER -- persona reply --> LLM
-  WORKER -- status --> FW
-  FW -. HP events .-> METRICS
-  METRICS -- scrape --> GFX
-  TG <-- DM reply -- AGENT
-  TW <-- tweet reply -- AGENT
+  %% ─── flows ───
+  TG -->|"CMD / buttons"| AGENT
+  TW -->|"@mention"| AGENT
+  AGENT -->|enqueue| QUEUE
+  QUEUE -->|fetch job| WORKER
+  WORKER -->|"swap + burn"| RPC
+  WORKER -->|quote| JUP
+  WORKER -->|"LLM reply"| LLM
+  WORKER -->|status| FW
+  FW -.-> METRICS
+  METRICS -->|scrape| GFX
+  AGENT -->|"DM reply"| TG
+  AGENT -->|"tweet reply"| TW
+
+  %% ─── styling ───
+  classDef user     fill:#FEE2E2,stroke:#333,color:#000;
+  classDef core     fill:#C7D2FE,stroke:#333,color:#000;
+  classDef worker   fill:#BBF7D0,stroke:#333,color:#000;
+  classDef external fill:#FDE68A,stroke:#333,color:#000;
+
+  class TG,TW,GFX user
+  class AGENT,QUEUE,METRICS,FW core
+  class WORKER worker
+  class RPC,JUP,LLM external
 
 ```
 

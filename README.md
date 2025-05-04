@@ -129,117 +129,200 @@
 
 ```mermaid
 flowchart LR
-  %% ─── user side ───
+  %% --- user layer ---
   subgraph Users
-    TG("Telegram\nUser")
-    TW("Twitter\nUser")
-    GFX(Grafana)
+    TG["Telegram\nUser"]
+    TW["Twitter\nUser"]
+    WEB["React\nDashboard"]
+    GFX["Grafana"]
   end
 
-  %% ─── core process ───
-  subgraph Agent
-    AGENT("Nexus Erebus\nAPI + Telegraf")
-    QUEUE("BullMQ Queues")
-    METRICS("/metrics\n(Prometheus)")
-    FW("Bubble Firewall\nHP Monitor")
+  %% --- service layer ---
+  subgraph Services
+    subgraph Core["Agent Process"]
+      AGENT["Nexus Erebus\nBot Core"]
+      QUEUE["BullMQ\nQueues"]
+      METRICS["/metrics\n(Prometheus)"]
+      FW["Bubble Firewall"]
+    end
+    API["REST Gateway\n(api-server.js)"]
+    subgraph Workers
+      WORKER["Trade / LLM\nWorker"]
+    end
   end
 
-  %% ─── workers ───
-  subgraph Workers
-    WORKER("Trade / LLM Worker")
-  end
-
-  %% ─── external services ───
+  %% --- external layer ---
   subgraph External
-    RPC("Solana RPC")
-    JUP("Jupiter API")
-    LLM("Ollama LLM")
+    REDIS["Redis 6"]
+    RPC["Solana RPC"]
+    JUP["Jupiter API"]
+    LLM["Ollama LLM"]
   end
 
-  %% ─── flows ───
-  TG -->|"CMD / buttons"| AGENT
-  TW -->|"@mention"| AGENT
-  AGENT -->|enqueue| QUEUE
-  QUEUE -->|fetch job| WORKER
-  WORKER -->|"swap + burn"| RPC
-  WORKER -->|quote| JUP
-  WORKER -->|"LLM reply"| LLM
-  WORKER -->|status| FW
-  FW -.-> METRICS
-  METRICS -->|scrape| GFX
-  AGENT -->|"DM reply"| TG
-  AGENT -->|"tweet reply"| TW
+  %% --- flows ---
+  TG    -->|"CMD / buttons"| AGENT
+  TW    -->|"@mention"     | AGENT
+  WEB   -->|"JWT REST"     | API
 
-  %% ─── styling ───
+  API   -->|"helper calls" | AGENT
+  API   -->|"enqueue trade"| QUEUE
+  AGENT -->|"enqueue"      | QUEUE
+  QUEUE -->|"jobs"         | WORKER
+
+  WORKER -->|"swap + burn" | RPC
+  WORKER -->|"quote"       | JUP
+  WORKER -->|"LLM reply"   | LLM
+  WORKER -->|"status"      | FW
+
+  API    -->|"cache"       | REDIS
+  AGENT  -->|"cache"       | REDIS
+  QUEUE  -->|"backend"     | REDIS
+
+  FW -.->|"HP events"      | METRICS
+  METRICS-->|"scrape"      | GFX
+
+  AGENT  -->|"DM reply"    | TG
+  AGENT  -->|"tweet reply" | TW
+  API    -->|"REST resp."  | WEB
+
+  %% --- styling ---
   classDef user     fill:#FEE2E2,stroke:#333,color:#000;
+  classDef api      fill:#A5F3FC,stroke:#333,color:#000;
   classDef core     fill:#C7D2FE,stroke:#333,color:#000;
   classDef worker   fill:#BBF7D0,stroke:#333,color:#000;
   classDef external fill:#FDE68A,stroke:#333,color:#000;
 
-  class TG,TW,GFX user
+  class TG,TW,WEB,GFX user
+  class API api
   class AGENT,QUEUE,METRICS,FW core
   class WORKER worker
-  class RPC,JUP,LLM external
+  class REDIS,RPC,JUP,LLM external
+
 
 ```
 
+
+
 ---
 
-## 🖥 Secure REST API Gateway
+Thought for a couple of seconds
 
-A lightweight Express service that lets any React/Next front‑end query balances, portfolios and queue trades – **without exposing private keys or the BullMQ/Redis internals.**  
-It sits next to the agent in the same Docker Compose network and is protected by:
 
-* **JWT Bearer tokens** (2 h TTL, secret in `.env`)
-* **express‑rate‑limit** (100 req / 15 min / IP)
-* **Helmet** security headers
-* **CORS** (configurable allow‑list)
+## 🖥 Secure REST API Gateway
 
-### Quick start (dev)
+A “paranoid-mode” Express service (`api-server.js`) that runs alongside the agent in Docker Compose. It exposes only safe HTTP endpoints for your React/Next front-end to:
+
+* **Authenticate** via social handle → daily-rotating JWT
+* **Query** deposit address, balances, portfolio, SOL price
+* **Mutate** auto-trade toggle, risk profile, and queue trades
+* **Health-check** and **metrics** passthrough
+
+All routes are guarded by:
+
+1. **Daily-rotating HMAC-SHA256 JWT** (2 h TTL, secret from `JWT_BASE_SECRET`)
+2. **CSRF double-cookie** (double-submit cookie pattern)
+3. **Zod schemas** for payload validation
+4. **Redis-backed rate limiting** (200 req/15 min/IP)
+5. **Helmet**, **CSP**, **HPP**, **XSS-Clean**, **mongo-sanitize**
+6. **ULID** per-request logging (morgan → winston JSON logs)
+
+### Quick start (dev)
 
 ```bash
-node api-server.js           # or add as a service in docker‑compose
+node api-server.js
 curl -X POST http://localhost:4000/auth \
      -H "Content-Type: application/json" \
      -d '{"handle":"malios"}'
 # ⇒ { "token": "eyJhbGciOi...", "expiresIn": 7200 }
-````
+```
 
-Use the returned token as `Authorization: Bearer …` for every subsequent call.
+Use `Authorization: Bearer <token>` and send back the `csrf_tok` cookie plus `X-CSRF-Token` header on every mutating request.
 
-| HTTP verb | Path         | Body (JSON)              | Purpose                                |                                 |                  |
-| --------- | ------------ | ------------------------ | -------------------------------------- | ------------------------------- | ---------------- |
-| `POST`    | `/auth`      | `{ "handle": "malios" }` | Issue JWT (verify user first – see 🛈) |                                 |                  |
-| `GET`     | `/wallet`    | —                        | Get deposit address                    |                                 |                  |
-| `GET`     | `/balance`   | —                        | SOL & tier‑token balance               |                                 |                  |
-| `GET`     | `/portfolio` | —                        | Full multi‑token snapshot              |                                 |                  |
-| `GET`     | `/sol-price` | —                        | Live SOL/USD price                     |                                 |                  |
-| `POST`    | `/auto`      | `{ "on": true }`         | Toggle auto‑trading                    |                                 |                  |
-| `POST`    | `/risk`      | \`{ "level": "low        |  med                                   |  high" }\`                      | Set risk profile |
-| `POST`    | `/trade`     | \`{ "side":"buy          | sell","mint": "...", "sol": 0.10 }\`   | Queue market trade (Jupiter v6) |                  |
-| `GET`     | `/health`    | —                        | Liveness probe                         |                                 |                  |
+### Endpoints
+
+| Method | Path         | Body (JSON)              | Description                             |                               |                  |
+| ------ | ------------ | ------------------------ | --------------------------------------- | ----------------------------- | ---------------- |
+| POST   | `/auth`      | `{ "handle": "malios" }` | Issue JWT (after social-ownership flow) |                               |                  |
+| GET    | `/wallet`    | —                        | Get your SOL deposit address            |                               |                  |
+| GET    | `/balance`   | —                        | Get SOL & agent-token balances          |                               |                  |
+| GET    | `/portfolio` | —                        | Full multi-token snapshot               |                               |                  |
+| GET    | `/sol-price` | —                        | Live SOL/USD price                      |                               |                  |
+| POST   | `/auto`      | `{ "on": true }`         | Toggle auto-trading                     |                               |                  |
+| POST   | `/risk`      | \`{ "level": "low"       | "med"                                   | "high" }\`                    | Set risk profile |
+| POST   | `/trade`     | \`{ "side":"buy"         | "sell","mint":<pk>,"sol":0.10 }\`       | Queue market trade via BullMQ |                  |
+| GET    | `/health`    | —                        | Liveness probe                          |                               |                  |
+| GET    | `/metrics`   | —                        | Redirect to Prometheus `/metrics`       |                               |                  |
 
 ### .env additions
 
-```
+```dotenv
 API_PORT=4000
-API_JWT_SECRET=change_me_please      # fallback: random secret on boot
+JWT_BASE_SECRET=your_daily_rotating_master_secret
 CORS_ORIGIN=https://your-frontend.app
+CSRF_COOKIE=csrf_tok
+REDIS_URL=redis://redis:6379
+RATE_LIMIT_POINTS=200
+RATE_LIMIT_WINDOW=900
 ```
 
-### 🛈 User verification via Telegram / Twitter
+### 🛈 User verification via Telegram / Twitter
 
-The `/auth` endpoint trusts any handle you pass – **you must prove ownership** first.
-A simple pattern:
+The `/auth` endpoint itself is untrusted: you must prove handle ownership, for example:
 
-1. Client requests a **challenge code** (`/auth/challenge?handle=@alice` – implement yourself).
-2. The agent bot DM’s that code to the user on Telegram or replies publicly on Twitter.
-3. Front‑end submits code back to `/auth/verify`, receives JWT.
+1. **Challenge**: Front-end calls `GET /auth/challenge?handle=@alice`.
+2. **Bot DM**: Agent sends a one-time PIN to `@alice` on Telegram (or Twitter).
+3. **Verify**: Front-end calls `POST /auth/verify` with `{ handle, code }`.
+4. **JWT**: Server verifies code, then returns the signed token.
 
-That flow ties the same handle you already store in Redis (`user:<handle>`) to a short‑lived web token, giving your React app authenticated access without additional passwords.
+This ties your existing Redis-stored `user:<handle>` to a short-lived web token without passwords.
 
 ---
 
+```mermaid
+flowchart TD
+  %% ── Authentication Flow ──
+  subgraph AuthFlow["🛡️ Auth Flow"]
+    UI[React UI]
+    Auth[api-server.js /auth]
+    Prot[Protected Routes]
+  end
+
+  UI -- "POST /auth" --> Auth
+  Auth -- "issue JWT & set CSRF cookie" --> UI
+  UI -- "Bearer JWT + CSRF header" --> Prot
+
+  %% ── Protected Requests ──
+  subgraph Requests["📦 Protected Requests"]
+    Prot -- "GET wallet" --> Wallet[walletOf]
+    Prot -- "POST trade" --> Trade[handleMessage via BullMQ]
+  end
+
+  %% ── Security & Storage ──
+  subgraph Security["🔒 Security & Storage"]
+    Auth -. "Zod validation" .-> Zod[Zod Schema]
+    Auth -. "Rate limiting" .-> RateLimit[RedisStore]
+    Auth -. "CSRF protection" .-> CSRF[csurf]
+    Prot -. "JWT verification" .-> Verify[HMAC daily secret]
+    Zod --> Redis
+    RateLimit --> Redis
+    CSRF --> Redis
+    Verify --> Redis
+  end
+
+  %% ── Styling by layer ──
+  classDef client fill:#FDE68A,stroke:#333,stroke-width:1px,color:#111;
+  classDef api fill:#A5F3FC,stroke:#333,stroke-width:1px,color:#000;
+  classDef security fill:#FCA5A5,stroke:#333,stroke-width:1px,color:#000;
+  classDef redis fill:#D9F99D,stroke:#333,stroke-width:1px,color:#000;
+  classDef internal fill:#E9D5FF,stroke:#333,stroke-width:1px,color:#000;
+
+  class UI client
+  class Auth,Prot,Wallet,Trade api
+  class Zod,RateLimit,CSRF,Verify security
+  class Redis redis
+
+
+```
 
 ## 🚦 Feature Flags
 
@@ -373,7 +456,7 @@ volumes:
 <summary>Dockerfile (placed in repo root)</summary>
 
 ```dockerfile
-FROM node:22-slim
+FROM node:23-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git build-essential make \
@@ -556,16 +639,6 @@ echo "vm.overcommit_memory = 1" | sudo tee -a /etc/sysctl.conf
 ```
 
 It’s a warning only—Redis will still run, but snapshots can fail under low RAM.
-
----
-
-## 🛣 Roadmap
-
-* [ ] Docker images for ARM + x64
-* [ ] Serum/Jupiter v7 multi‑hop routes
-* [ ] Jest unit tests + CI badge
-* [ ] Governance mini‑DAO per agent‑token
-* [ ] Web dashboard (Next.js + tRPC)
 
 ---
 

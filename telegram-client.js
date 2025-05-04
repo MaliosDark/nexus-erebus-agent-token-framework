@@ -177,7 +177,8 @@ export class TelegramClient {
         platform: 'telegram',
         handle:   h,
         text:     txt,
-        reply:    m => ctx.telegram.sendMessage(chatId, m, { parse_mode:'Markdown' })
+        reply: m => ctx.telegram.sendMessage(chatId, m, { parse_mode: 'HTML' })
+
       });
     });
   }

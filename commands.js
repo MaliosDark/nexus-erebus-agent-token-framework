@@ -12,7 +12,7 @@ import {
   refreshBalances,
   NXR_MINT
 } from './utils-solana.js';
-import { upsertUser, getUser, getAllUsers } from './db.js';
+import { getAllUsers, getUser, upsertUser, getWalletSecret, setWalletSecret } from './db.js';
 import { remember, recall } from './memory.js';
 import { enqueueTrade } from './jobQueue.js';
 
@@ -83,27 +83,50 @@ async function fetchTokenPrices(mints) {
 }
 
 // ─── Initialize users from Redis + on-chain watcher ──────────────────────
-export async function initializeUsers() {
-  const handles = await getAllUsers();
-  for (const handle of handles) {
-    const data = await getUser(handle);
-    if (!data) continue;
-    const wallet = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(data.wallet)));
-    users.set(handle, {
-      wallet,
-      sol    : parseFloat(data.sol),
-      tierBal: parseFloat(data.tierBal),
-      auto   : data.auto === 'true',
-      risk   : data.risk
-    });
-  }
-  watchDeposits(users, AGENT_MINT_PK, async (handle, u) => {
-    users.set(handle, u);
-    await persist(handle, u);
-    if (u.auto && u.sol > 0.05) {
-      await enqueueTrade({ cmd: { t:'sell', mint:'So11111111111111111111111111111111111111112', sol:0.02 }, handle });
+export async function initializeUsers () {
+    const handles = await getAllUsers();
+  
+    for (const handle of handles) {
+      const data = await getUser(handle);
+      if (!data) continue;                               // sanity
+  
+      let kp;
+      try {
+        const secret = await getWalletSecret(handle);    // → Uint8Array | null
+        if (secret && secret.byteLength === 64) {
+          kp = Keypair.fromSecretKey(secret);
+          secret.fill(0);                                // scrub
+        } else {
+          throw new Error('missing or malformed secret');
+        }
+      } catch (err) {
+        // 🛠  Auto‑repair: make a new wallet & persist the encrypted secret
+        console.warn(`[INIT] ${handle}: ${err.message} – generating new wallet`);
+        kp = Keypair.generate();
+        await setWalletSecret(handle, kp.secretKey);     // encrypt & store
+      }
+  
+      // hydrate working set
+      users.set(handle, {
+        wallet  : kp,
+        sol     : parseFloat(data.sol ?? '0'),
+        tierBal : parseFloat(data.tierBal ?? '0'),
+        auto    : data.auto === 'true',
+        risk    : data.risk ?? 'med'
+      });
     }
-  });
+  
+    // begin live balance watcher
+    watchDeposits(users, AGENT_MINT_PK, async (handle, u) => {
+      users.set(handle, u);
+      await persist(handle, u);
+      if (u.auto && u.sol > 0.05) {
+        await enqueueTrade({
+          cmd   : { t: 'sell', mint: 'So11111111111111111111111111111111111111112', sol: 0.02 },
+          handle
+        });
+      }
+    });
 }
 
 // ─── Persist helper ───────────────────────────────────────────────────────

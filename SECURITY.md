@@ -11,30 +11,48 @@ Every request and event is subject to middleware filters, cryptographic validati
 
 ```mermaid
 flowchart TD
+  %% Layout Direction
+  %% Use TB (top-bottom) for vertical clarity
+  %% ─────────────────────────────────────────────
+
   %% ─── Client Interfaces ───
-  UI[React UI]:::client
-  TG[Telegram User]:::social
-  TW[Twitter User]:::social
+  subgraph Clients
+    UI[React UI]:::client
+    TG[Telegram User]:::social
+    TW[Twitter User]:::social
+  end
 
-  %% ─── API & Protected Routes ───
-  AuthEndpoint["API Auth Endpoint"]:::api
-  Routes["Protected API Routes"]:::api
-  WalletService["Wallet Service"]:::logic
-  TradeHandler["Trade Queue Handler"]:::logic
+  %% ─── API Layer ───
+  subgraph API
+    AuthEndpoint["API Auth Endpoint"]:::api
+    Routes["Protected API Routes"]:::api
+  end
 
-  %% ─── Social Bot Gateway ───
-  BotCore["Nexus Agent Core"]:::agent
+  %% ─── Business Logic ───
+  subgraph Logic
+    WalletService["Wallet Service"]:::logic
+    TradeHandler["Trade Queue Handler"]:::logic
+  end
 
-  %% ─── Security & Validation ───
-  ZodValidation["Zod Schema Validation"]:::security
-  RateLimiter["Rate Limiter (Redis)"]:::security
-  CSRFCheck["CSRF Protection (Double Submit)"]:::security
-  JWTCheck["JWT Verification w/ HKDF"]:::security
+  %% ─── Security / Middleware ───
+  subgraph Security
+    ZodValidation["Zod Schema Validation"]:::security
+    RateLimiter["Rate Limiter (Redis)"]:::security
+    CSRFCheck["CSRF Protection (Double Submit)"]:::security
+    JWTCheck["JWT Verification w/ HKDF"]:::security
+  end
 
-  %% ─── Monitoring & Infrastructure ───
-  FW["Bubble Firewall (Health Monitor)"]:::firewall
-  Metrics["/metrics"]:::infra
-  Redis[(Redis)]:::infra
+  %% ─── Bot Core ───
+  subgraph Bots
+    BotCore["Nexus Agent Core"]:::agent
+  end
+
+  %% ─── Infra & Monitoring ───
+  subgraph Infra
+    Redis[(Redis)]:::infra
+    FW["Bubble Firewall (Health Monitor)"]:::firewall
+    Metrics["/metrics"]:::infra
+  end
 
   %% ─── Auth Flow ───
   UI -->|POST /auth| AuthEndpoint
@@ -45,6 +63,19 @@ flowchart TD
   Routes -->|GET /wallet| WalletService
   Routes -->|POST /trade| TradeHandler
 
+  %% ─── Security Hooks ───
+  AuthEndpoint -.-> ZodValidation
+  AuthEndpoint -.-> RateLimiter
+  Routes -.-> CSRFCheck
+  Routes -.-> JWTCheck
+
+  %% ─── Redis ───
+  WalletService --> Redis
+  TradeHandler --> Redis
+  RateLimiter --> Redis
+  CSRFCheck --> Redis
+  JWTCheck --> Redis
+
   %% ─── Bot Interactions ───
   TG -->|Button Callback| BotCore
   TW -->|Mention| BotCore
@@ -52,22 +83,9 @@ flowchart TD
   BotCore -->|DM Reply| TG
   BotCore -->|Tweet Reply| TW
 
-  %% ─── Security Checks ───
-  AuthEndpoint -.-> ZodValidation
-  AuthEndpoint -.-> RateLimiter
-  Routes -.-> CSRFCheck
-  Routes -.-> JWTCheck
-
   %% ─── Monitoring ───
   TradeHandler --> FW
   FW -->|Metrics| Metrics
-
-  %% ─── Redis Connections ───
-  WalletService --> Redis
-  TradeHandler --> Redis
-  RateLimiter --> Redis
-  CSRFCheck --> Redis
-  JWTCheck --> Redis
 
   %% ─── Styling ───
   classDef client     fill:#E0F2FE,stroke:#1E40AF,color:#000;
@@ -78,6 +96,7 @@ flowchart TD
   classDef agent      fill:#C7D2FE,stroke:#1D4ED8,color:#000;
   classDef social     fill:#FBCFE8,stroke:#9D174D,color:#000;
   classDef firewall   fill:#FCA5A5,stroke:#991B1B,color:#000,font-weight:bold;
+
 
 ```
 

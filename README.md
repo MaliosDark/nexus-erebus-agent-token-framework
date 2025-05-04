@@ -52,33 +52,30 @@
 <img alt="Jupiter v6"        src="https://img.shields.io/badge/Jupiter-v6-14f195?style=for-the-badge" />
 <img alt="TypeScript?"       src="https://img.shields.io/badge/JavaScript-ESM-yellow?style=for-the-badge&logo=javascript" />
 
-
-
 ---
 
 # Nexus Erebus 🚀  Autonomous Agent‑Token Framework
 
 *Nexus Erebus* lets you spin up AI‑driven social agents, and beyond—each running real on‑chain strategies, burning $NXR for fuel, and rewarding holders of their micro‑tokens.
 
-
 ## ✨ Features
 
 | Module                     | Highlights                                                                                          |
 | -------------------------- | --------------------------------------------------------------------------------------------------- |
 | **🧠 Agent Core**          | Ollama-driven persona with memory retrieval + goals from `.env`.                                    |
-| **🔄 Auto-Wallet**         | One wallet per user; handles SOL → token swaps, fee-reserve, and NXR burns.                         |
-| **📈 Jupiter v6 Swaps**    | Real main-net trades with retry & slippage guard.                                                   |
-| **🔥 NXR Burn Loop**       | Every action swaps SOL → \$NXR → burn + dev-fee.                                                    |
-| **🖼 Telegram UI**         | Banner greeting, inline menu, DM-only sensitive data.                                               |
+| **🔄 Auto-Wallet**         | One wallet per user; handles SOL → token swaps, fee‑reserve, and NXR burns.                         |
+| **📈 Jupiter v6 Swaps**    | Real main‑net trades with retry & slippage guard.                                                   |
+| **🔥 NXR Burn Loop**       | Every action swaps SOL → \$NXR → burn + dev‑fee.                                                    |
+| **🖼 Telegram UI**         | Banner greeting, inline menu, DM‑only sensitive data.                                               |
 | **🐤 Twitter Bridge**      | `@mention` commands + cookie/proxy session reuse.                                                   |
 | **💾 Persistence (Redis)** | User wallets, balances, flags, risk profiles in Redis hashes; conversation memory in Redis Streams. |
 | **🟢 Feature Flags**       | Enable/disable Telegram & Twitter at runtime via `USE_TELEGRAM`/`USE_TWITTER` env vars.             |
-| **🎛️ Job Queues**         | BullMQ-powered queues for trades & LLM jobs, with retries, back-off and dead-letter handling.       |
-| **⚡ Caching**              | Redis GET/SETEX for Jupiter quotes & token decimals, reducing API calls & latency.                  |
+| **🎛️ Job Queues**         | BullMQ‑powered queues for trades & LLM jobs, with retries, back‑off and dead‑letter handling.       |
+| **⚡ Caching**             | Redis GET/SETEX for Jupiter quotes & token decimals, reducing API calls & latency.                  |
 | **📊 Metrics**             | Prometheus endpoint (`/metrics`) via Express + `prom-client` for trades, burns, HP, queue stats.    |
 | **🛡 Security**            | No external wallet reads; agent only trusts its own keys.                                           |
 | **🧱 Bubble Firewall**     | Runtime shield with HP bar + Pub/Sub health events on `nexus.events`.                               |
-| **✅ Environment Checker**  | Verifies required config, files & compiled deps on boot.                                            |
+| **✅ Environment Checker** | Verifies required config, files & compiled deps on boot.                                            |
 
 ---
 
@@ -102,18 +99,79 @@
     ├── telegram-client.js   💬 Telegram inline menus & message routing
     ├── twitter-client.js    🐦 Twitter scraper + DM support
     ├── utils-solana.js      🌊 Solana swaps, burns & balance listeners (with cache)
-    ├── utils-token.js       🪙 Generic SPL-token utilities (decimals, transfers)
+    ├── utils-token.js       🪙 Generic SPL‑token utilities (decimals, transfers)
     ├── worker.js            ⚙️ BullMQ workers (process trades & LLM jobs)
     ├── .env.example         🌐 Sample environment configuration
     └── assets/              🖼️ Images & static assets
         ├── banner.png       🏷️ Hero banner
         ├── inline.png       📜 Inline menu screenshot
         └── welcome.png      👋 Welcome banner (DM)
+````
+
+---
+
+## 🖥 Prerequisites
+
+| Tool / Service | Min Version | Notes                                                |
+| -------------- | ----------- | ---------------------------------------------------- |
+| **Node.js**    | ≥ 16        | tested on LTS 18–22                                  |
+| **npm**        | ≥ 8         | pnpm/yarn OK                                         |
+| **Redis**      | ≥ 6         | auto‑compiled by `ensure-deps.js`, or bring your own |
+| **Ollama**     | ≥ 0.1.21    | local model download ≈ 4 GB                          |
+| **Git & make** | —           | used to compile Redis                                |
+| **Solana CLI** | any         | key generation & RPC helpers                         |
+
+---
+
+
+## 🏗 Architecture Overview — improved
+
+```mermaid
+graph LR
+  %% ───── user side ─────
+  subgraph User Space
+    TG(Telegram User)
+    TW(Twitter User)
+    GFX(  Grafana )
+  end
+
+  %% ───── core process ─────
+  subgraph Agent Process
+    AGENT[Nexus Erebus<br/>API + Telegraf]
+    QUEUE[BullMQ<br/>Queues]
+    METRICS[/Prometheus<br/>/metrics/]
+    FW[Bubble Firewall<br/>HP Monitor]
+  end
+
+  %% ───── workers ─────
+  subgraph Background Workers
+    WORKER[Trade / LLM Worker]
+  end
+
+  %% ───── external services ─────
+  subgraph On‑chain & AI
+    RPC[(Solana RPC)]
+    JUP[Jupiter API]
+    LLM[(Ollama LLM)]
+  end
+
+  %% ───── flows ─────
+  TG -- CMD / buttons --> AGENT
+  TW -- @mention tweet --> AGENT
+  AGENT -- enqueue --> QUEUE
+  QUEUE -- fetch job --> WORKER
+  WORKER -- swap + burn --> RPC
+  WORKER -- route quote --> JUP
+  WORKER -- persona reply --> LLM
+  WORKER -- status --> FW
+  FW -. HP events .-> METRICS
+  METRICS -- scrape --> GFX
+  TG <-- DM reply -- AGENT
+  TW <-- tweet reply -- AGENT
 
 ```
 
 ---
-
 
 ## 🚦 Feature Flags
 
@@ -192,72 +250,149 @@ npm start                  # auto-checks .env + starts agent
 > - presence of `index.js`, `package.json`
 > - readable config before booting any Solana agent
 
-## 🐤 Twitter Command Cheatsheet  *(v 2.1)*
+## 🐤 Twitter Command Cheatsheet *(v 2.1)*
 
-> Mention the bot in a tweet **or** reply to any of its tweets.  
+> Mention the bot in a tweet **or** reply to any of its tweets.
 > The bot only parses messages that include its handle (`@YourBot`).
 
-| Purpose | Syntax (example) | Notes |
-|---------|-----------------|-------|
-| **Show deposit address** | `@YourBot deposit`<br/>`@YourBot wallet` | Returns the SOL address bound to your Twitter handle. |
-| **Show balance** | `@YourBot balance` | SOL & agent‑token holdings. |
-| **Buy a token** | `@YourBot buy 8HVy… 0.25` | `buy <MINT> <SOL>` |
-| **Sell a token** | `@YourBot sell 8HVy… 0.25` | Reverse swap. |
-| **Toggle auto‑trading** | `@YourBot auto on`<br/>`@YourBot auto off` | Per‑user switch. |
-| **Set risk profile** | `@YourBot risk low` / `med` / `high` | Influences future auto‑trades. |
+| Purpose                  | Syntax (example)                           | Notes                                                 |
+| ------------------------ | ------------------------------------------ | ----------------------------------------------------- |
+| **Show deposit address** | `@YourBot deposit`<br/>`@YourBot wallet`   | Returns the SOL address bound to your Twitter handle. |
+| **Show balance**         | `@YourBot balance`                         | SOL & agent‑token holdings.                           |
+| **Buy a token**          | `@YourBot buy 8HVy… 0.25`                  | `buy <MINT> <SOL>`                                    |
+| **Sell a token**         | `@YourBot sell 8HVy… 0.25`                 | Reverse swap.                                         |
+| **Toggle auto‑trading**  | `@YourBot auto on`<br/>`@YourBot auto off` | Per‑user switch.                                      |
+| **Set risk profile**     | `@YourBot risk low` / `med` / `high`       | Influences future auto‑trades.                        |
 
-⚠️ Make sure you set **`AGENT_TW_HANDLE`** in your `.env` — *without* the
-leading “@” — so the framework can strip self‑mentions before parsing.
+⚠️ Make sure you set **`AGENT_TW_HANDLE`** in your `.env` — *without* the leading “@”.
+
+---
+
+## 💬 Telegram Command Cheatsheet
+
+| Purpose              | Command                |       |         |
+| -------------------- | ---------------------- | ----- | ------- |
+| Show deposit address | `deposit` or `wallet`  |       |         |
+| Show balance         | `balance`              |       |         |
+| Buy                  | `/buy <MINT> <SOL>`    |       |         |
+| Sell                 | `/sell <MINT> <SOL>`   |       |         |
+| Toggle auto‑trading  | `auto on` / `auto off` |       |         |
+| Set risk profile     | \`risk low             |  med  |  high\` |
 
 ---
 
 ## 📜 Environment Reference
 
-| Variable | Description |
-|----------|-------------|
-| `AGENT_NAME`            | `AgentName`|
-| `AGENT_MINT`            | SPL mint of the agent token |
-| `TIER_THRESHOLDS`       | CSV of bronze,silver,gold levels |
-| `RPC`                   | Solana RPC endpoint |
-| `NXR_MINT`              | Core $NXR mint |
-| `DEV_WALLET_SK`         | JSON array secret‑key (burn fee receiver) |
-| `OLLAMA_URL`            | Local Ollama endpoint |
-| `OLLAMA_MODEL`          | eg. `llama3.2:3b` |
-| `TELEGRAM_BOT_TOKEN`    | BotFather token |
-| `TWITTER_USERNAME`      | Twitter login (UI scraping) |
-| `TWITTER_PASSWORD`      | Twitter login |
-| `TWITTER_PROXY_URL`     | Optional proxy `http://user:pass@ip:port` |
-| `TWITTER_COOKIES_PATH`  | Reuses session across boots |
-| `AGENT_TW_HANDLE`       | Bot’s Twitter handle **without “@”** |
-| `FW_MAX_HP`             | Starting firewall HP (default `20`) |
-| `FW_DECAY_ON_ERROR`     | HP lost per logic error (default `2`) |
-| `FW_DECAY_ON_RPC_FAIL`  | HP lost on RPC/network errors (default `5`) |
-| `FW_AUTO_EXIT`          | Shut down on 0 HP (`true` / `false`) |
+| Variable                                                                                           | Description                 |
+| -------------------------------------------------------------------------------------------------- | --------------------------- |
+| `AGENT_NAME`                                                                                       | `AgentName`                 |
+| `AGENT_MINT`                                                                                       | SPL mint of the agent token |
+| `TIER_THRESHOLDS`                                                                                  | CSV of bronze,silver,gold   |
+| `RPC`                                                                                              | Solana RPC endpoint         |
+| `NXR_MINT`                                                                                         | Core \$NXR mint             |
+| `DEV_WALLET_SK`                                                                                    | JSON array secret‑key       |
+| `OLLAMA_URL`                                                                                       | Local Ollama endpoint       |
+| `OLLAMA_MODEL`                                                                                     | e.g. `llama3.2:3b`          |
+| `TELEGRAM_BOT_TOKEN`                                                                               | BotFather token             |
+| `TWITTER_USERNAME`                                                                                 | Twitter login               |
+| `TWITTER_PASSWORD`                                                                                 | Twitter login               |
+| `TWITTER_PROXY_URL`                                                                                | Optional proxy              |
+| `TWITTER_COOKIES_PATH`                                                                             | Re‑uses session             |
+| `AGENT_TW_HANDLE`                                                                                  | Bot Twitter handle          |
+| `FW_MAX_HP`                                                                                        | Starting firewall HP        |
+| `FW_DECAY_ON_ERROR`                                                                                | HP lost per logic error     |
+| `FW_DECAY_ON_RPC_FAIL`                                                                             | HP lost on RPC fail         |
+| `FW_AUTO_EXIT`                                                                                     | Auto‑exit at 0 HP           |
+| `USDC_MINT`                                                                                        | USDC mint for quotes        |
+| `MIN_NXR_SOL`                                                                                      | SOL converted to NXR fuel   |
+| `MIN_SOL_FEES`                                                                                     | SOL kept for fees           |
+| `NXR_BURN_PCT`                                                                                     | % of NXR burned             |
+| `AUTO_TRADE_ENABLED`                                                                               | Enable auto‑trading         |
+| `AUTO_TRADE_PERIOD_SEC`                                                                            | Auto‑trade interval         |
+| `AI_RISK_PROFILE`                                                                                  | Default risk profile        |
+| `AI_MAX_BUY_SOL`                                                                                   | SOL cap per buy             |
+| `AI_TP_PERCENT`                                                                                    | Take‑profit %               |
+| `AI_SL_PERCENT`                                                                                    | Stop‑loss %                 |
+| `FW_WEIGHT_ERROR`, `FW_WEIGHT_RPCFAIL`, `FW_WEIGHT_SPAM`, `FW_WEIGHT_CRITICAL`                     | Firewall weights            |
+| `FW_HEAL_RATE`, `FW_HEAL_INTERVAL`, `FW_BAR_LENGTH`                                                | Firewall heal settings      |
+| `REDIS_PASS`                                                                                       | Redis password              |
+| `AGENT_GREETING`, `AGENT_GREETING_IMG`                                                             | Welcome copy/banner         |
+| `AGENT_MENU_TITLE`, `AGENT_MENU_BUTTONS`                                                           | Inline menu text            |
+| `AGENT_PERSONA`, `AGENT_GOALS`                                                                     | LLM prompt seeds            |
+| `AGENT_MEMORY_FILE`                                                                                | Memory file name            |
+| `TWITTER_EMAIL`                                                                                    | Email for 2FA               |
+| `TWITTER_API_KEY`, `TWITTER_API_SECRET_KEY`, `TWITTER_ACCESS_TOKEN`, `TWITTER_ACCESS_TOKEN_SECRET` | Twitter v2 creds            |
+
+---
+
+## 📊 Metrics & Observability
+
+* **Endpoint** – [`/metrics`](http://localhost:9100/metrics) (Prometheus format).
+* **Prometheus scrape example**
+
+  ```yaml
+  - job_name: 'nexus-erebus'
+    static_configs:
+      - targets: ['localhost:9100']
+  ```
+* **Grafana** – import `extras/grafana-dashboard.json` for live trades, burns, queue depth and firewall HP.
 
 ---
 
 ## 🖼️ Screenshots
 
-| Welcome Banner (DM) | Inline Menu |
-|---------------------|-------------|
+| Welcome Banner (DM)                         | Inline Menu                                |
+| ------------------------------------------- | ------------------------------------------ |
 | <img src="assets/welcome.png" width="400"/> | <img src="assets/inline.png" width="400"/> |
+
+---
+
+## 🔒 Security Notes
+
+* **Firewall auto‑exit** – process exits at 0 HP (`FW_AUTO_EXIT=true`).
+* **Self‑custody** – agent acts only with its own keypair (no external wallet reads).
+
 
 ---
 
 ## 🛡 Bubble Firewall Protection
 
 Each agent runs inside a **protective runtime firewall**:
-- 💥 Tracks every swap failure, RPC error, or exception
-- 🔋 Visual HP bar in the console
-- 🔐 Auto-shuts down when health reaches 0 to protect your keys
-- 🧠 Configurable via `.env`: `FW_MAX_HP`, `FW_DECAY_ON_ERROR`, etc.
+
+* 💥 Tracks every swap failure, RPC error, or exception
+* 🔋 Visual HP bar in the console
+* 🔐 Auto-shuts down when health reaches 0 to protect your keys
+* 🧠 Configurable via `.env`: `FW_MAX_HP`, `FW_DECAY_ON_ERROR`, etc.
 
 ---
 
+## 🛠 Troubleshooting / FAQ
+
+| Symptom                    | Fix                                                            |
+| -------------------------- | -------------------------------------------------------------- |
+| `redis connection refused` | Make sure Redis is running (or `ensure-deps.js` completed).    |
+| Ollama 404 / model missing | Check `OLLAMA_MODEL`; run `ollama pull <model>`.               |
+| Twitter login loop         | Delete `cookies.json`, verify proxy / 2FA settings.            |
+| Trades stuck in queue      | Ensure `worker.js` is up and RPC not rate‑limited.             |
+| `Error: Firewall popped`   | Inspect recent errors, increase `FW_MAX_HP` or fix root cause. |
+
+---
+
+## 🛣 Roadmap
+
+* [ ] Docker images for ARM + x64
+* [ ] Serum/Jupiter v7 multi‑hop routes
+* [ ] Jest unit tests + CI badge
+* [ ] Governance mini‑DAO per agent‑token
+* [ ] Web dashboard (Next.js + tRPC)
+
+---
+
+
 ## 🤝 Contributing
 
-1. **Fork** the repo  
-2. `npm i` and run `npm run lint` before PR  
+1. **Fork** the repo
+2. `npm i` and run `npm run lint` before PR
 
 Stars ⭐ and feedback are always welcome!
 

@@ -1,7 +1,7 @@
 # ───────────────────────────────────────────────────────────────
 # Nexus Erebus Agent – container image
 # ───────────────────────────────────────────────────────────────
-FROM node:22-slim
+FROM node:23-slim
 
 # Optional: install git & build‑essentials (only if you still rely on ensure‑deps.js)
 RUN apt-get update && \

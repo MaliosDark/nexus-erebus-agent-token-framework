@@ -185,6 +185,62 @@ flowchart LR
 
 ---
 
+## 🖥 Secure REST API Gateway
+
+A lightweight Express service that lets any React/Next front‑end query balances, portfolios and queue trades – **without exposing private keys or the BullMQ/Redis internals.**  
+It sits next to the agent in the same Docker Compose network and is protected by:
+
+* **JWT Bearer tokens** (2 h TTL, secret in `.env`)
+* **express‑rate‑limit** (100 req / 15 min / IP)
+* **Helmet** security headers
+* **CORS** (configurable allow‑list)
+
+### Quick start (dev)
+
+```bash
+node api-server.js           # or add as a service in docker‑compose
+curl -X POST http://localhost:4000/auth \
+     -H "Content-Type: application/json" \
+     -d '{"handle":"malios"}'
+# ⇒ { "token": "eyJhbGciOi...", "expiresIn": 7200 }
+````
+
+Use the returned token as `Authorization: Bearer …` for every subsequent call.
+
+| HTTP verb | Path         | Body (JSON)              | Purpose                                |                                 |                  |
+| --------- | ------------ | ------------------------ | -------------------------------------- | ------------------------------- | ---------------- |
+| `POST`    | `/auth`      | `{ "handle": "malios" }` | Issue JWT (verify user first – see 🛈) |                                 |                  |
+| `GET`     | `/wallet`    | —                        | Get deposit address                    |                                 |                  |
+| `GET`     | `/balance`   | —                        | SOL & tier‑token balance               |                                 |                  |
+| `GET`     | `/portfolio` | —                        | Full multi‑token snapshot              |                                 |                  |
+| `GET`     | `/sol-price` | —                        | Live SOL/USD price                     |                                 |                  |
+| `POST`    | `/auto`      | `{ "on": true }`         | Toggle auto‑trading                    |                                 |                  |
+| `POST`    | `/risk`      | \`{ "level": "low        |  med                                   |  high" }\`                      | Set risk profile |
+| `POST`    | `/trade`     | \`{ "side":"buy          | sell","mint": "...", "sol": 0.10 }\`   | Queue market trade (Jupiter v6) |                  |
+| `GET`     | `/health`    | —                        | Liveness probe                         |                                 |                  |
+
+### .env additions
+
+```
+API_PORT=4000
+API_JWT_SECRET=change_me_please      # fallback: random secret on boot
+CORS_ORIGIN=https://your-frontend.app
+```
+
+### 🛈 User verification via Telegram / Twitter
+
+The `/auth` endpoint trusts any handle you pass – **you must prove ownership** first.
+A simple pattern:
+
+1. Client requests a **challenge code** (`/auth/challenge?handle=@alice` – implement yourself).
+2. The agent bot DM’s that code to the user on Telegram or replies publicly on Twitter.
+3. Front‑end submits code back to `/auth/verify`, receives JWT.
+
+That flow ties the same handle you already store in Redis (`user:<handle>`) to a short‑lived web token, giving your React app authenticated access without additional passwords.
+
+---
+
+
 ## 🚦 Feature Flags
 
 You can enable or disable each social channel at runtime without code changes, via two simple env vars in your `.env`:
@@ -486,6 +542,20 @@ Each agent runs inside a **protective runtime firewall**:
 | Twitter login loop         | Delete `cookies.json`, verify proxy / 2FA settings.            |
 | Trades stuck in queue      | Ensure `worker.js` is up and RPC not rate‑limited.             |
 | `Error: Firewall popped`   | Inspect recent errors, increase `FW_MAX_HP` or fix root cause. |
+
+---
+
+### About the *“Memory overcommit”* warning
+
+`ensure-deps.js` tries to enable `vm.overcommit_memory=1` so Redis can fork safely during persistence.
+On Linux you’ll need **sudo** (or set it once system‑wide):
+
+```bash
+sudo sysctl -w vm.overcommit_memory=1
+echo "vm.overcommit_memory = 1" | sudo tee -a /etc/sysctl.conf
+```
+
+It’s a warning only—Redis will still run, but snapshots can fail under low RAM.
 
 ---
 

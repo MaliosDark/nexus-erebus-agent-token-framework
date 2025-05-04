@@ -124,50 +124,61 @@
 ---
 
 
-## 🏗 Architecture Overview — improved
+## 🏗 Architecture Overview 
 
 ```mermaid
-graph LR
-  %% ───── user side ─────
-  subgraph User Space
-    TG(Telegram User)
-    TW(Twitter User)
-    GFX(  Grafana )
+flowchart LR
+  %% ─── user side ───
+  subgraph Users
+    TG("Telegram\nUser")
+    TW("Twitter\nUser")
+    GFX(Grafana)
   end
 
-  %% ───── core process ─────
-  subgraph Agent Process
-    AGENT[Nexus Erebus<br/>API + Telegraf]
-    QUEUE[BullMQ<br/>Queues]
-    METRICS[/Prometheus<br/>/metrics/]
-    FW[Bubble Firewall<br/>HP Monitor]
+  %% ─── core process ───
+  subgraph Agent
+    AGENT("Nexus Erebus\nAPI + Telegraf")
+    QUEUE("BullMQ Queues")
+    METRICS("/metrics\n(Prometheus)")
+    FW("Bubble Firewall\nHP Monitor")
   end
 
-  %% ───── workers ─────
-  subgraph Background Workers
-    WORKER[Trade / LLM Worker]
+  %% ─── workers ───
+  subgraph Workers
+    WORKER("Trade / LLM Worker")
   end
 
-  %% ───── external services ─────
-  subgraph On‑chain & AI
-    RPC[(Solana RPC)]
-    JUP[Jupiter API]
-    LLM[(Ollama LLM)]
+  %% ─── external services ───
+  subgraph External
+    RPC("Solana RPC")
+    JUP("Jupiter API")
+    LLM("Ollama LLM")
   end
 
-  %% ───── flows ─────
-  TG -- CMD / buttons --> AGENT
-  TW -- @mention tweet --> AGENT
-  AGENT -- enqueue --> QUEUE
-  QUEUE -- fetch job --> WORKER
-  WORKER -- swap + burn --> RPC
-  WORKER -- route quote --> JUP
-  WORKER -- persona reply --> LLM
-  WORKER -- status --> FW
-  FW -. HP events .-> METRICS
-  METRICS -- scrape --> GFX
-  TG <-- DM reply -- AGENT
-  TW <-- tweet reply -- AGENT
+  %% ─── flows ───
+  TG -->|"CMD / buttons"| AGENT
+  TW -->|"@mention"| AGENT
+  AGENT -->|enqueue| QUEUE
+  QUEUE -->|fetch job| WORKER
+  WORKER -->|"swap + burn"| RPC
+  WORKER -->|quote| JUP
+  WORKER -->|"LLM reply"| LLM
+  WORKER -->|status| FW
+  FW -.-> METRICS
+  METRICS -->|scrape| GFX
+  AGENT -->|"DM reply"| TG
+  AGENT -->|"tweet reply"| TW
+
+  %% ─── styling ───
+  classDef user     fill:#FEE2E2,stroke:#333,color:#000;
+  classDef core     fill:#C7D2FE,stroke:#333,color:#000;
+  classDef worker   fill:#BBF7D0,stroke:#333,color:#000;
+  classDef external fill:#FDE68A,stroke:#333,color:#000;
+
+  class TG,TW,GFX user
+  class AGENT,QUEUE,METRICS,FW core
+  class WORKER worker
+  class RPC,JUP,LLM external
 
 ```
 
@@ -232,6 +243,105 @@ Add or configure your Redis instance in `.env`:
 ```bash
 REDIS_URL=redis://localhost:6379
 # REDIS_PASS=<your password, if needed>
+```
+
+## 🐳 Docker Setup
+
+> One command spins up **Redis 6**, **Ollama** (auto‑pulls `llama3.2:3b`) and the Nexus Erebus agent.
+
+<details>
+<summary>docker-compose.yml</summary>
+
+```yaml
+version: "3.9"
+
+services:
+  redis:
+    image: redis:6-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_MODELS=/ollama-models
+    volumes:
+      - ollama-models:/ollama-models
+    command: >
+      bash -ec '
+        ollama pull llama3.2:3b || true
+        exec ollama serve
+      '
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  agent:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    env_file: .env            # reuse your existing env file
+    volumes:
+      - .:/app                # hot‑reload for local dev
+      - agent-data:/app/data  # cookies.json, logs
+    ports:
+      - "9100:9100"           # Prometheus /metrics
+    command: ["npm", "start"]
+
+volumes:
+  redis-data:
+  ollama-models:
+  agent-data:
+````
+
+</details>
+
+<details>
+<summary>Dockerfile (placed in repo root)</summary>
+
+```dockerfile
+FROM node:22-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git build-essential make \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN npm ci --omit=dev
+RUN node ensure-deps.js      # builds agent‑twitter-client
+
+ENV NODE_ENV=production TZ=UTC
+CMD ["npm", "start"]
+```
+
+</details>
+
+### Quick start
+
+```bash
+# build and launch everything
+docker compose up -d
+
+# watch logs
+docker compose logs -f agent
 ```
 
 

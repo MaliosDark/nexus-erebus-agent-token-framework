@@ -1,6 +1,6 @@
 agent-twitter-client/
-redis/
-node_modules/
+redis
+node_modules
 *.env
 cookies.json
 memory-*.json
@@ -8,4 +8,3 @@ users.json
 dump.rdb
 *.log
 dist
-

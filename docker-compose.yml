@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:6-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"               # Ollama HTTP API
+    environment:
+      - OLLAMA_MODELS=/ollama-models
+    volumes:
+      - ollama-models:/ollama-models
+    # Pull model if missing, then serve
+    command: >
+      bash -ec '
+        ollama pull llama3.2:3b || true
+        exec ollama serve
+      '
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+
+  agent:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    env_file: .env            # mount your existing env file
+    volumes:
+      - .:/app                # hot‑reload if you dev inside container
+      - agent-data:/app/data  # cookies.json, logs, etc.
+    ports:
+      - "9100:9100"           # Prometheus /metrics scrape
+    command: ["npm", "start"]
+
+volumes:
+  redis-data:
+  ollama-models:
+  agent-data:

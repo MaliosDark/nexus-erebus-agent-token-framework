@@ -215,7 +215,7 @@ leading “@” — so the framework can strip self‑mentions before parsing.
 
 | Variable | Description |
 |----------|-------------|
-| `AGENT_NAME`            | `Agent1` / `Agent2` / your‑agent |
+| `AGENT_NAME`            | `AgentName`|
 | `AGENT_MINT`            | SPL mint of the agent token |
 | `TIER_THRESHOLDS`       | CSV of bronze,silver,gold levels |
 | `RPC`                   | Solana RPC endpoint |

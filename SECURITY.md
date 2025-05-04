@@ -1,43 +1,85 @@
 
 # 🔐 Security Policy – Nexus Erebus Agent Framework
 
-The Nexus Erebus agent framework implements a hardened, layered security model. Despite being open-source, all critical attack surfaces are minimized or isolated. The architecture emphasizes zero trust, least privilege, and auditability.
+The **Nexus Erebus Agent Framework** is designed under strict security principles: *zero trust, minimal surface area, cryptographic integrity, and full observability*. It implements a **multi-layered paranoia stack**.
 
 ---
 
 ## 🧱 Layered Defense Architecture
 
-Each request is processed through a comprehensive pipeline of input validation, CSRF protection, cryptographic authentication, and strict middleware control before reaching the business logic.
+Every request and event is subject to middleware filters, cryptographic validation, schema enforcement, and firewall monitoring.
 
 ```mermaid
 flowchart TD
-  %% Client Interface
+  %% ─── Client Interfaces ───
   UI[React UI]:::client
+  TG[Telegram User]:::social
+  TW[Twitter User]:::social
 
-  %% Auth Flow
-  UI -->|POST /auth| Auth[api-server.js /auth]:::api
-  Auth -->|JWT issued + CSRF cookie set| UI
-  UI -->|Bearer JWT + X-CSRF-Token| Routes[Protected Routes]:::api
+  %% ─── API & Protected Routes ───
+  AuthEndpoint["API Auth Endpoint"]:::api
+  Routes["Protected API Routes"]:::api
+  WalletService["Wallet Service"]:::logic
+  TradeHandler["Trade Queue Handler"]:::logic
 
-  %% Protected Operations
-  Routes -->|GET /wallet| Wallet[walletOf(req.user)]:::logic
-  Routes -->|POST /trade| Trade[handleMessage()]:::logic
+  %% ─── Social Bot Gateway ───
+  BotCore["Nexus Agent Core"]:::agent
 
-  %% Validation & Control
-  Auth -.-> Zod[Zod Schema Validation]:::security
-  Auth -.-> Rate[Redis Rate-Limiting]:::security
-  Routes -.-> CSRF[CSRF Double Submit Check]:::security
-  Routes -.-> JWT[JWT Verification (HKDF)]:::security
+  %% ─── Security & Validation ───
+  ZodValidation["Zod Schema Validation"]:::security
+  RateLimiter["Rate Limiter (Redis)"]:::security
+  CSRFCheck["CSRF Protection (Double Submit)"]:::security
+  JWTCheck["JWT Verification w/ HKDF"]:::security
 
-  %% Backend Storage & Session
-  Wallet & Trade & Rate & CSRF & JWT --> Redis[(Redis)]:::infra
+  %% ─── Monitoring & Infrastructure ───
+  FW["Bubble Firewall (Health Monitor)"]:::firewall
+  Metrics["/metrics"]:::infra
+  Redis[(Redis)]:::infra
 
-  classDef client fill:#E0F2FE,stroke:#333,color:#000;
-  classDef api fill:#DBEAFE,stroke:#333,color:#000;
-  classDef logic fill:#EDE9FE,stroke:#333,color:#000;
-  classDef security fill:#FCE7F3,stroke:#333,color:#000,font-style:italic;
-  classDef infra fill:#FDE68A,stroke:#333,color:#000;
-````
+  %% ─── Auth Flow ───
+  UI -->|POST /auth| AuthEndpoint
+  AuthEndpoint -->|JWT + CSRF Cookie| UI
+  UI -->|Bearer JWT + CSRF Header| Routes
+
+  %% ─── API Operations ───
+  Routes -->|GET /wallet| WalletService
+  Routes -->|POST /trade| TradeHandler
+
+  %% ─── Bot Interactions ───
+  TG -->|Button Callback| BotCore
+  TW -->|Mention| BotCore
+  BotCore -->|Trigger Trade| TradeHandler
+  BotCore -->|DM Reply| TG
+  BotCore -->|Tweet Reply| TW
+
+  %% ─── Security Checks ───
+  AuthEndpoint -.-> ZodValidation
+  AuthEndpoint -.-> RateLimiter
+  Routes -.-> CSRFCheck
+  Routes -.-> JWTCheck
+
+  %% ─── Monitoring ───
+  TradeHandler --> FW
+  FW -->|Metrics| Metrics
+
+  %% ─── Redis Connections ───
+  WalletService --> Redis
+  TradeHandler --> Redis
+  RateLimiter --> Redis
+  CSRFCheck --> Redis
+  JWTCheck --> Redis
+
+  %% ─── Styling ───
+  classDef client     fill:#E0F2FE,stroke:#1E40AF,color:#000;
+  classDef api        fill:#DBEAFE,stroke:#1E3A8A,color:#000;
+  classDef logic      fill:#EDE9FE,stroke:#6B21A8,color:#000;
+  classDef security   fill:#FCE7F3,stroke:#831843,color:#000,font-style:italic;
+  classDef infra      fill:#FDE68A,stroke:#92400E,color:#000;
+  classDef agent      fill:#C7D2FE,stroke:#1D4ED8,color:#000;
+  classDef social     fill:#FBCFE8,stroke:#9D174D,color:#000;
+  classDef firewall   fill:#FCA5A5,stroke:#991B1B,color:#000,font-weight:bold;
+
+```
 
 ---
 
@@ -45,42 +87,55 @@ flowchart TD
 
 ### API Server (`api-server.js`)
 
-* **HKDF-Based Daily JWT Rotation**
-  2-hour expiration with per-day HMAC keys derived via `crypto.hkdfSync`.
+* ✅ **Daily-Rotating JWTs** (HMAC-SHA256 via HKDF)
+* 🛡 **CSRF Protection**: Double submit cookie/header
+* 🔍 **Zod Schema Validation** for all POST payloads
+* 🧱 **Redis Rate Limiting**: 200 reqs / 15 min / IP
+* 🧼 **Input Sanitization**:
 
-* **CSRF Protection (Double Submit Cookie)**
-  Implemented using the `csurf` middleware with a same-site cookie and header token match.
+  * `helmet`, `hpp`, `xss-clean`, `express-mongo-sanitize`
+* 🛰 **ULID Tracing** for all request logs
+* 🔒 **CORS Whitelisting** via `.env`
+* 🚫 **No Private Keys** exposed outside the agent process
 
-* **Input Validation via Zod**
-  Strict schema validation prevents malformed or unsafe payloads.
+---
 
-* **Rate-Limiting via RedisStore**
-  Per-IP request caps (200 requests per 15 minutes), suitable for distributed deployments.
+## 🛰 Telegram + Twitter Gateway Security
 
-* **Middleware Hardening**
+### Telegram
 
-  * `helmet`: Security-related HTTP headers
-  * `xss-clean`: Strips potential XSS vectors
-  * `hpp`: Blocks HTTP parameter pollution
-  * `express-mongo-sanitize`: Prevents NoSQL injections
+* Handles only structured callback queries, never raw text
+* Verifies user via handle → mapped in Redis
+* Logs all actions with ULID + TTL for replay protection
 
-* **Per-request ULID Tracing**
-  All incoming requests are tagged with a unique cryptographically sortable ID (`ulid`).
+### Twitter
 
-* **CORS Isolation**
-  Only domains defined in the `CORS_ORIGIN` whitelist are permitted.
+* Processes mentions from a verified list
+* Replies/DMs are idempotent and write-protected
+* Full handle-to-agent verification pipeline enforced
 
-* **No Private Key Exposure**
-  The API only interfaces with public/derived data. Private keys remain within agent scope.
+---
+
+## 🧯 Bubble Firewall
+
+The `firewall.js` module monitors real-time agent behavior and publishes alerts to `/metrics`.
+
+* 🩺 LLM response time tracking
+* 📉 Trade execution failure detection
+* 🔔 Prometheus-compatible events
+* 💣 Optional auto-disable triggers (future)
 
 ---
 
 ## 🔄 Token Lifecycle
 
-* JWT is signed using a per-day key (`HMAC-SHA256`) derived from `API_JWT_SECRET`
-* Tokens expire after 2 hours
-* Tokens must be sent as `Authorization: Bearer <token>`
-* Protected endpoints also require a valid CSRF header and cookie
+* JWT signed with `HMAC-SHA256` + daily `HKDF`
+* 2h expiration
+* Requires:
+
+  * `Authorization: Bearer <token>`
+  * `x-csrf-token` header
+  * `csrf_tok` cookie
 
 ```env
 API_JWT_SECRET=change_this_to_a_long_random_string
@@ -92,33 +147,42 @@ CSRF_COOKIE=csrf_tok
 
 ## ✅ Authentication Flow
 
-1. Frontend requests `/auth` with a Telegram/Twitter handle
-2. Server responds with:
+1. Client sends a `POST /auth` request with a Telegram or Twitter handle
+2. Server issues:
 
-   * JWT signed with daily-rotated key
-   * CSRF token set via cookie
-3. On subsequent requests:
+   * JWT signed with daily HKDF-derived key
+   * `csrf_tok` cookie
+3. Frontend stores token and echoes it in all requests
+4. On protected routes, server:
 
-   * JWT is passed via `Authorization` header
-   * CSRF token is passed via `x-csrf-token` header
-4. Server verifies JWT signature and expiry, and validates CSRF
+   * Verifies JWT integrity and expiry
+   * Confirms CSRF header/cookie match
 
-Ownership verification (e.g. DM challenge) is expected to be handled at the frontend level **before** requesting the token.
-
----
-
-
-## 🔎 Vulnerability Reporting
-
-Please report vulnerabilities responsibly via email:
-
-📧 [malios666@gmail.com](mailto:malios666@gmail.com)
+Frontend must validate ownership before calling `/auth`
+(e.g. DM or tweet challenge verification via bot logic)
 
 ---
 
-## Maintainer
+## 📦 Agent Hardening
+
+* 🔐 Private keys live only in memory and never leave `index.js`
+* 🧬 Trade operations routed through Redis queues
+* 🤖 Agent and workers isolated via Docker Compose network
+* 📈 Prometheus support via `metrics.js`
+
+---
+
+## 📣 Disclosure
+
+Please report vulnerabilities responsibly to:
+
+📧 **[malios666@gmail.com](mailto:malios666@gmail.com)**
+
+---
+
+## 👤 Maintainer
 
 **MaliosDark**
-GitHub: [https://github.com/MaliosDark](https://github.com/MaliosDark)
+GitHub → [https://github.com/MaliosDark](https://github.com/MaliosDark)
 
 ---

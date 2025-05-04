@@ -1,4 +1,4 @@
-// telegram-client.js  — inline menu + trade panel + self-mention-strip (updated)
+// telegram-client.js  — inline menu + trade panel + self-mention-strip with chatId persistence
 // ---------------------------------------------------------------
 import { Telegraf, Markup } from 'telegraf';
 import 'dotenv/config';
@@ -18,14 +18,18 @@ export class TelegramClient {
   constructor () {
     this.bot = new Telegraf(TOK, { handlerTimeout: 9_000 });
     this.helpers = {
-      walletOf   : ()=>'–',
-      balanceOf  : ()=>({sol:'0',tier:'0'}),
-      ensureUser : h=>console.log('⚠️ ensureUser not implemented',h),
-      toggleAuto : h=>({autoTrade:false,risk:'balanced'}),
-      setRisk    : (h,lvl)=>({autoTrade:false,risk:lvl})
+      walletOf    : ()=>'–',
+      balanceOf   : ()=>({sol:'0',tier:'0'}),
+      ensureUser  : h=>console.log('⚠️ ensureUser not implemented',h),
+      toggleAuto  : h=>({autoTrade:false,risk:'balanced'}),
+      setRisk     : (h,lvl)=>({autoTrade:false,risk:lvl}),
+      saveChatId  : async (h,id)=>{}    // will be overridden in index.js
     };
   }
-  setHelpers(o){ this.helpers = { ...this.helpers, ...o }; }
+
+  setHelpers(o){
+    this.helpers = { ...this.helpers, ...o };
+  }
 
   // ── inline menus ───────────────────────────────────────────
   static mainMenu(h){
@@ -60,8 +64,10 @@ export class TelegramClient {
   #routes(cb){
     // /start
     this.bot.start(async ctx=>{
-      const h = ctx.from.username ?? ctx.from.id.toString();
+      const h      = ctx.from.username ?? ctx.from.id.toString();
+      const chatId = ctx.chat.id.toString();
       this.helpers.ensureUser(h);
+      await this.helpers.saveChatId(h, chatId);
       if (IMG_URL) await ctx.replyWithPhoto(IMG_URL,{caption:GREET});
       else         await ctx.reply(GREET);
       await ctx.reply(MENU_T, TelegramClient.mainMenu(h));
@@ -69,7 +75,8 @@ export class TelegramClient {
 
     // callback buttons
     this.bot.on('callback_query', async ctx=>{
-      const data = ctx.callbackQuery.data;
+      const data     = ctx.callbackQuery.data;
+      const chatId   = ctx.callbackQuery.message.chat.id.toString();
       let handle, id;
 
       // parse handle & id
@@ -81,6 +88,7 @@ export class TelegramClient {
       }
 
       this.helpers.ensureUser(handle);
+      await this.helpers.saveChatId(handle, chatId);
 
       // answer callback query, ignore if expired
       try {
@@ -132,10 +140,10 @@ export class TelegramClient {
     });
 
     // text / commands (DM + groups)
-    this.bot.on('text', ctx=>{
-      const h   = ctx.from.username ?? ctx.from.id.toString();
-      let   txt = ctx.message.text;
-      const chatId = ctx.chat.id;
+    this.bot.on('text', async ctx=>{
+      const h      = ctx.from.username ?? ctx.from.id.toString();
+      const chatId = ctx.chat.id.toString();
+      let   txt    = ctx.message.text;
 
       // ignore noise in groups
       const hasMention = ctx.message.entities?.some(e=>e.type==='mention');
@@ -146,6 +154,7 @@ export class TelegramClient {
         txt = txt.replace(new RegExp(`@${this.me}`,'ig'), '').trim();
 
       this.helpers.ensureUser(h);
+      await this.helpers.saveChatId(h, chatId);
       cb?.({
         platform : 'telegram',
         handle   : h,

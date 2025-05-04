@@ -27,6 +27,11 @@ await db.write();
 // ───────────────────────────────────────────────────────────
 export async function upsertUser(handle, data) {
   const key = `user:${handle}`;
+  if (data.chatId) {
+    // store chatId too
+    await redis.hset(key, 'chatId', data.chatId);
+    delete data.chatId;
+  }
   await redis.sadd(USERS_SET, handle);
   await redis.hset(key, data);
 }

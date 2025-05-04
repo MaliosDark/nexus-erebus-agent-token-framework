@@ -39,6 +39,7 @@
 <img alt="Express"           src="https://img.shields.io/badge/Express-v5.1.0-black?style=for-the-badge&logo=express" />
 <img alt="Redis"             src="https://img.shields.io/badge/Redis-%3E%3D6-orange?style=for-the-badge&logo=redis" />
 <img alt="BullMQ"            src="https://img.shields.io/badge/BullMQ-queue-red?style=for-the-badge&logo=redis&logoColor=white" />
+<img alt="Docker" src="https://img.shields.io/badge/Docker-image-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
 <img alt="Prometheus"        src="https://img.shields.io/badge/Prometheus-metrics-orange?style=for-the-badge&logo=prometheus" />
 <img alt="Telegraf"          src="https://img.shields.io/badge/Telegraf-v4.16.3-0088CC?style=for-the-badge&logo=telegraf" />
 <img alt="agent-twitter-client"

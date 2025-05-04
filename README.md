@@ -31,18 +31,27 @@
   </a>
 
   <!-- Tech / ecosystem -->
-  <br/>
-  <img alt="Solana"
-       src="https://img.shields.io/badge/Solana-mainnet%20beta-14f195?style=for-the-badge&logo=solana&logoColor=white" />
-  <img alt="Telegram bot"
-       src="https://img.shields.io/badge/Telegram-bot-blue?style=for-the-badge&logo=telegram" />
-  <img alt="Twitter agent"
-       src="https://img.shields.io/badge/Twitter-agent-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" />
-  <img alt="Languages count"
-       src="https://img.shields.io/github/languages/count/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge" />
-  <img alt="Top language"
-       src="https://img.shields.io/github/languages/top/MaliosDark/nexus-erebus-agent-token-framework?style=for-the-badge" />
-</p>
+<br/>
+<img alt="Solana"            src="https://img.shields.io/badge/Solana-mainnet%20beta-14f195?style=for-the-badge&logo=solana&logoColor=white" />
+<img alt="Telegram Bot"      src="https://img.shields.io/badge/Telegram-bot-blue?style=for-the-badge&logo=telegram" />
+<img alt="Twitter Agent"     src="https://img.shields.io/badge/Twitter-agent-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" />
+<img alt="Node.js"           src="https://img.shields.io/badge/Node.js-%3E%3D16-green?style=for-the-badge&logo=node.js" />
+<img alt="Express"           src="https://img.shields.io/badge/Express-v5.1.0-black?style=for-the-badge&logo=express" />
+<img alt="Redis"             src="https://img.shields.io/badge/Redis-%3E%3D6-orange?style=for-the-badge&logo=redis" />
+<img alt="BullMQ"            src="https://img.shields.io/badge/BullMQ-queue-red?style=for-the-badge&logo=redis&logoColor=white" />
+<img alt="Prometheus"        src="https://img.shields.io/badge/Prometheus-metrics-orange?style=for-the-badge&logo=prometheus" />
+<img alt="Telegraf"          src="https://img.shields.io/badge/Telegraf-v4.16.3-0088CC?style=for-the-badge&logo=telegraf" />
+<img alt="agent-twitter-client"
+     src="https://img.shields.io/badge/agent--twitter--client-local-lightgrey?style=for-the-badge&logo=github" />
+<img alt="ioredis"           src="https://img.shields.io/badge/ioredis-client-yellow?style=for-the-badge&logo=redis&logoColor=white" />
+<img alt="node-fetch"        src="https://img.shields.io/badge/node--fetch-v3.3.2-0059D4?style=for-the-badge" />
+<img alt="dotenv"            src="https://img.shields.io/badge/dotenv-config-green?style=for-the-badge" />
+<img alt="@solana/web3.js"   src="https://img.shields.io/badge/%40solana%2Fweb3.js-v1.98.2-14f195?style=for-the-badge" />
+<img alt="@solana/spl-token" src="https://img.shields.io/badge/%40solana%2Fspl--token-v0.4.13-14f195?style=for-the-badge" />
+<img alt="Ollama"            src="https://img.shields.io/badge/Ollama-LLM-5A47FB?style=for-the-badge" />
+<img alt="Jupiter v6"        src="https://img.shields.io/badge/Jupiter-v6-14f195?style=for-the-badge" />
+<img alt="TypeScript?"       src="https://img.shields.io/badge/JavaScript-ESM-yellow?style=for-the-badge&logo=javascript" />
+
 
 
 ---

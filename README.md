@@ -54,40 +54,119 @@
 
 ## ✨ Features
 
-| Module | Highlights |
-|--------|------------|
-| **🧠 Agent Core** | Ollama‑driven persona with memory retrieval + goals from `.env`. |
-| **🔄 Auto‑Wallet** | One wallet per user; handles SOL → token swaps, fee‑reserve, and NXR burns. |
-| **📈 Jupiter v6 Swaps** | Real main‑net trades with retry & slippage guard. |
-| **🔥 NXR Burn Loop** | Every action swaps SOL → $NXR → burn + dev‑fee. |
-| **🖼 Telegram UI** | Banner greeting, inline menu, DM‑only sensitive data. |
-| **🐤 Twitter Bridge** | `@mention` commands + cookie/proxy session reuse. |
-| **💾 Persistence** | LowDB user vault + JSON memory per agent. |
-| **🛡 Security** | No external wallet read; agent only trusts its own keys. |
-| **🧱 Bubble Firewall** | Runtime shield that depletes on errors and RPC failures. |
-| **✅ Environment Checker** | Verifies required config & files on boot. |
+| Module                     | Highlights                                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| **🧠 Agent Core**          | Ollama-driven persona with memory retrieval + goals from `.env`.                                    |
+| **🔄 Auto-Wallet**         | One wallet per user; handles SOL → token swaps, fee-reserve, and NXR burns.                         |
+| **📈 Jupiter v6 Swaps**    | Real main-net trades with retry & slippage guard.                                                   |
+| **🔥 NXR Burn Loop**       | Every action swaps SOL → \$NXR → burn + dev-fee.                                                    |
+| **🖼 Telegram UI**         | Banner greeting, inline menu, DM-only sensitive data.                                               |
+| **🐤 Twitter Bridge**      | `@mention` commands + cookie/proxy session reuse.                                                   |
+| **💾 Persistence (Redis)** | User wallets, balances, flags, risk profiles in Redis hashes; conversation memory in Redis Streams. |
+| **🟢 Feature Flags**       | Enable/disable Telegram & Twitter at runtime via `USE_TELEGRAM`/`USE_TWITTER` env vars.             |
+| **🎛️ Job Queues**         | BullMQ-powered queues for trades & LLM jobs, with retries, back-off and dead-letter handling.       |
+| **⚡ Caching**              | Redis GET/SETEX for Jupiter quotes & token decimals, reducing API calls & latency.                  |
+| **📊 Metrics**             | Prometheus endpoint (`/metrics`) via Express + `prom-client` for trades, burns, HP, queue stats.    |
+| **🛡 Security**            | No external wallet reads; agent only trusts its own keys.                                           |
+| **🧱 Bubble Firewall**     | Runtime shield with HP bar + Pub/Sub health events on `nexus.events`.                               |
+| **✅ Environment Checker**  | Verifies required config, files & compiled deps on boot.                                            |
 
 ---
 
 ## 🏗 Folder Structure
 
 ```text
-📦 nexus‑erebus-agent-token-framework
- ├─ index.js          # main runner (reads .env)
- ├─ check-env.js      # 🔐 checks required .env vars + files
- ├─ firewall.js       # 🧱 bubble shield + HP decay
- ├─ twitter-client.js # cookie+proxy login wrapper
- ├─ telegram-client.js# menu, helpers, safe DM
- ├─ utils-solana.js   # Jupiter, SPL, balance listeners
- ├─ db.js             # LowDB user storage
- ├─ memory.js         # simple convo memory
- ├─ retry.js          # exponential back‑off wrapper
- ├─ assets/
- │   └─ banner.png    # 650×350 hero image
- └─ .env              # ✨ edit everything here
+└── nexus-erebus-agent-token-framework/
+    ├── README.md            📖 Project overview & docs
+    ├── check-env.js         🔐 Pre-flight env & file validation
+    ├── db.js                🗄️ Redis-backed user storage helpers
+    ├── ensure-deps.js       🔧 Clone & build deps (Redis, Twitter client) + malloc fix
+    ├── firewall.js          🛡️ Bubble firewall (HP shield + Pub/Sub health events)
+    ├── index.js             🚀 Main runner (spawns Metrics & Worker, Telegram + Twitter)
+    ├── jobQueue.js          🔄 BullMQ queue definitions for trades & LLM jobs
+    ├── LICENSE              ⚖️ MIT license
+    ├── memory.js            💾 Redis Streams for agent conversation memory
+    ├── metrics.js           📈 Express + prom-client for `/metrics`
+    ├── package.json         📦 NPM metadata, scripts & dependencies
+    ├── redisClient.js       ❤️ Singleton ioredis client (with BullMQ config)
+    ├── retry.js             🔁 Exponential backoff helper
+    ├── telegram-client.js   💬 Telegram inline menus & message routing
+    ├── twitter-client.js    🐦 Twitter scraper + DM support
+    ├── utils-solana.js      🌊 Solana swaps, burns & balance listeners (with cache)
+    ├── utils-token.js       🪙 Generic SPL-token utilities (decimals, transfers)
+    ├── worker.js            ⚙️ BullMQ workers (process trades & LLM jobs)
+    ├── .env.example         🌐 Sample environment configuration
+    └── assets/              🖼️ Images & static assets
+        ├── banner.png       🏷️ Hero banner
+        ├── inline.png       📜 Inline menu screenshot
+        └── welcome.png      👋 Welcome banner (DM)
+
 ```
 
 ---
+
+
+## 🚦 Feature Flags
+
+You can enable or disable each social channel at runtime without code changes, via two simple env vars in your `.env`:
+
+```bash
+# Enable/disable Telegram support
+USE_TELEGRAM=true    # default: true
+
+# Enable/disable Twitter support
+USE_TWITTER=false    # default: false
+```
+
+* **`USE_TELEGRAM`** – when `false`, the TelegramClient won’t be initialized and no polling or button menus will be registered.
+* **`USE_TWITTER`** – when `true`, the Twitter bridge spins up and listens for `@YourBot` mentions; otherwise all Twitter logic is skipped.
+* This lets you run only the channels you need (or scale them independently in Docker/Kubernetes) without touching code.
+
+---
+
+## 🔧 Redis Integration
+
+Replaced the old file-based DB and in-memory maps with Redis for:
+
+1. **Cross-process state & persistence**
+
+   * User wallets, balances, auto-trade flags, risk profiles stored in Redis Hashes (`HSET`/`HGET`).
+   * A Redis Set tracks all active handles so workers can hydrate their own user maps on boot.
+
+2. **Job queues & rate-limiting**
+
+   * BullMQ queues for trades and LLM jobs (`bullmq` backed by Redis streams), ensuring you never hammer Jupiter, Ollama, or social APIs.
+   * Automatic retry, back-off and dead-letter handling for failed jobs.
+
+3. **Caching & performance**
+
+   * Cache expensive calls (e.g. Jupiter quotes, token decimals) with `GET`/`SETEX` TTLs.
+   * 10–100× fewer external API hits, lower latency.
+
+4. **Pub/Sub & observability**
+
+   * Firewall health updates and swap/transfer failures are published on a Redis channel (`nexus.events`), ready to hook into Grafana/Loki via Redis Pub/Sub.
+   * Feel free to wire these events into your dashboard for real-time dashboards and alerts.
+
+5. **Conversation memory**
+
+   * Agent “memory” moved from flat JSON to per-user Redis Streams (`XADD`/`XREVRANGE`) with automatic TTL, so your LLM stays focused on recent context.
+
+### Why Redis?
+
+* **Atomic operations** (hashes, sets, streams) keep all nodes in sync.
+* **Persistence** and **snapshotting** ensure you never lose user data on crashes.
+* **High throughput** (100k–1M ops/sec) at sub-millisecond latency.
+* **Built-in TTLs** let us expire old memory entries automatically.
+* **Rich ecosystem** (BullMQ, Pub/Sub, Prometheus exporters) plugs right into modern observability stacks.
+
+Add or configure your Redis instance in `.env`:
+
+```bash
+REDIS_URL=redis://localhost:6379
+# REDIS_PASS=<your password, if needed>
+```
+
 
 ## 🚀 Quick Start
 

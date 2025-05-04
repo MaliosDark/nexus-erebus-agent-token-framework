@@ -129,59 +129,79 @@
 
 ```mermaid
 flowchart LR
-  %% ─── user side ───
+  %% --- user layer ---
   subgraph Users
-    TG("Telegram\nUser")
-    TW("Twitter\nUser")
-    GFX(Grafana)
+    TG["Telegram\nUser"]
+    TW["Twitter\nUser"]
+    WEB["React\nDashboard"]
+    GFX["Grafana"]
   end
 
-  %% ─── core process ───
-  subgraph Agent
-    AGENT("Nexus Erebus\nAPI + Telegraf")
-    QUEUE("BullMQ Queues")
-    METRICS("/metrics\n(Prometheus)")
-    FW("Bubble Firewall\nHP Monitor")
+  %% --- service layer ---
+  subgraph Services
+    subgraph Core["Agent Process"]
+      AGENT["Nexus Erebus\nBot Core"]
+      QUEUE["BullMQ\nQueues"]
+      METRICS["/metrics\n(Prometheus)"]
+      FW["Bubble Firewall"]
+    end
+    API["REST Gateway\n(api-server.js)"]
+    subgraph Workers
+      WORKER["Trade / LLM\nWorker"]
+    end
   end
 
-  %% ─── workers ───
-  subgraph Workers
-    WORKER("Trade / LLM Worker")
-  end
-
-  %% ─── external services ───
+  %% --- external layer ---
   subgraph External
-    RPC("Solana RPC")
-    JUP("Jupiter API")
-    LLM("Ollama LLM")
+    REDIS["Redis 6"]
+    RPC["Solana RPC"]
+    JUP["Jupiter API"]
+    LLM["Ollama LLM"]
   end
 
-  %% ─── flows ───
-  TG -->|"CMD / buttons"| AGENT
-  TW -->|"@mention"| AGENT
-  AGENT -->|enqueue| QUEUE
-  QUEUE -->|fetch job| WORKER
-  WORKER -->|"swap + burn"| RPC
-  WORKER -->|quote| JUP
-  WORKER -->|"LLM reply"| LLM
-  WORKER -->|status| FW
-  FW -.-> METRICS
-  METRICS -->|scrape| GFX
-  AGENT -->|"DM reply"| TG
-  AGENT -->|"tweet reply"| TW
+  %% --- flows ---
+  TG    -->|"CMD / buttons"| AGENT
+  TW    -->|"@mention"     | AGENT
+  WEB   -->|"JWT REST"     | API
 
-  %% ─── styling ───
+  API   -->|"helper calls" | AGENT
+  API   -->|"enqueue trade"| QUEUE
+  AGENT -->|"enqueue"      | QUEUE
+  QUEUE -->|"jobs"         | WORKER
+
+  WORKER -->|"swap + burn" | RPC
+  WORKER -->|"quote"       | JUP
+  WORKER -->|"LLM reply"   | LLM
+  WORKER -->|"status"      | FW
+
+  API    -->|"cache"       | REDIS
+  AGENT  -->|"cache"       | REDIS
+  QUEUE  -->|"backend"     | REDIS
+
+  FW -.->|"HP events"      | METRICS
+  METRICS-->|"scrape"      | GFX
+
+  AGENT  -->|"DM reply"    | TG
+  AGENT  -->|"tweet reply" | TW
+  API    -->|"REST resp."  | WEB
+
+  %% --- styling ---
   classDef user     fill:#FEE2E2,stroke:#333,color:#000;
+  classDef api      fill:#A5F3FC,stroke:#333,color:#000;
   classDef core     fill:#C7D2FE,stroke:#333,color:#000;
   classDef worker   fill:#BBF7D0,stroke:#333,color:#000;
   classDef external fill:#FDE68A,stroke:#333,color:#000;
 
-  class TG,TW,GFX user
+  class TG,TW,WEB,GFX user
+  class API api
   class AGENT,QUEUE,METRICS,FW core
   class WORKER worker
-  class RPC,JUP,LLM external
+  class REDIS,RPC,JUP,LLM external
+
 
 ```
+
+
 
 ---
 

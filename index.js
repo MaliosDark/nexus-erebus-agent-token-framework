@@ -3,7 +3,18 @@ import 'dotenv/config';
 import { spawn } from 'child_process';
 import { TelegramClient } from './telegram-client.js';
 import { TwitterClient }  from './twitter-client.js';
-import { initializeUsers, walletOf, balanceOf, toggleAuto, setRisk, handleMessage } from './commands.js';
+import {
+  initializeUsers,
+  walletOf,
+  balanceOf,
+  toggleAuto,
+  setRisk,
+  handleMessage,
+  fetchSolPrice,
+  getPortfolio,
+  recall as getHistory
+} from './commands.js';
+
 
 // ─── Spawn & monitor child services ───────────────────────────────
 function startService(name, script) {
@@ -35,6 +46,9 @@ if (USE_TELEGRAM) {
   tg.setHelpers({
     walletOf,
     balanceOf,
+    fetchSolPrice,
+    getPortfolio,
+    getHistory,               // use the imported alias
     ensureUser : handle => {},         // not needed here
     toggleAuto,
     setRisk,
@@ -43,6 +57,7 @@ if (USE_TELEGRAM) {
   await tg.init(handleMessage);
   console.log('[BOOT] Telegram ON');
 }
+
 
 if (USE_TWITTER) {
   await tw.init();

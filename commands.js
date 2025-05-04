@@ -13,45 +13,76 @@ import {
   NXR_MINT
 } from './utils-solana.js';
 import { upsertUser, getUser, getAllUsers } from './db.js';
-import { remember } from './memory.js';
+import { remember, recall } from './memory.js';
 import { enqueueTrade } from './jobQueue.js';
 
-const users = new Map();
-const AGENT_MINT_PK   = new PublicKey(process.env.AGENT_MINT);
-const USDC_MINT       = process.env.USDC_MINT || 'EPjFWdd5AufqSSqeM2q9wZ4kQZ28i5rAi3BAooT5LD';
-const PERSONA         = process.env.AGENT_PERSONA.replace('%AGENT%', process.env.AGENT_NAME);
-const GOALS           = process.env.AGENT_GOALS;
-const OLLAMA_URL      = process.env.OLLAMA_URL;
-const OLLAMA_MODEL    = process.env.OLLAMA_MODEL;
+const users         = new Map();
+const AGENT_MINT_PK = new PublicKey(process.env.AGENT_MINT);
+const PERSONA       = process.env.AGENT_PERSONA.replace('%AGENT%', process.env.AGENT_NAME);
+const GOALS         = process.env.AGENT_GOALS;
+const OLLAMA_URL    = process.env.OLLAMA_URL;
+const OLLAMA_MODEL  = process.env.OLLAMA_MODEL;
+const USDC_MINT     = process.env.USDC_MINT; // e.g. EPjFW...
 
-/** Fetch USD price for SOL from Binance */
+// ─── Command‐trigger regexes ──────────────────────────────────────────────
+const BUY_RX    = /(?:\/buy|buy)\s+([A-Za-z0-9]{32,44})\s+([\d.]+)/i;
+const SELL_RX   = /(?:\/sell|sell)\s+([A-Za-z0-9]{32,44})\s+([\d.]+)/i;
+const DEP_RX    = /\b(deposit|wallet)\b/i;
+const BAL_RX    = /\bbalance\b/i;
+const PORT_RX   = /\b(?:holdings|portfolio|how much i hold)\b/i;
+const PRICE_RX  = /\b(?:sol(?:ana)? price|price of solana)\b/i;
+const AUTO_RX   = /\bauto(?:trade)?\s*(on|off)\b/i;
+const RISK_RX   = /\brisk\s*(low|med|high)\b/i;
+const TW_HANDLE = (process.env.AGENT_TW_HANDLE||'').toLowerCase();
+
+// ─── Helpers to strip self‐mention ─────────────────────────────────────────
+function stripMention(txt) {
+  return TW_HANDLE ? txt.replace(new RegExp(`@${TW_HANDLE}`, 'ig'), '').trim() : txt;
+}
+
+// ─── Fetch USD price for SOL, cascading APIs ──────────────────────────────
 async function fetchSolPrice() {
+  // 1) Binance
   try {
     const res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT');
     const j   = await res.json();
-    return parseFloat(j.price);
+    if (j.price) return parseFloat(j.price);
   } catch (e) {
-    console.warn('⚠️ fetchSolPrice failed', e);
-    return null;
+    console.warn('⚠️ Binance SOL price fetch failed', e);
   }
+  // 2) CoinGecko
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const j   = await res.json();
+    if (j.solana?.usd) return j.solana.usd;
+  } catch (e) {
+    console.warn('⚠️ CoinGecko SOL price fetch failed', e);
+  }
+  // 3) On‐chain via Jupiter→USDC
+  try {
+    const route = await quoteSOLto(USDC_MINT, LAMPORTS_PER_SOL);
+    if (route?.outAmount) return route.outAmount / 1e6; // USDC is 6 decimals
+  } catch (e) {
+    console.warn('⚠️ Jupiter SOL→USDC quote failed', e);
+  }
+  return null;
 }
 
-/** Fetch USD prices for an array of Solana SPL mint addresses */
+// ─── Fetch USD prices for SPL tokens via CoinGecko ────────────────────────
 async function fetchTokenPrices(mints) {
-  if (mints.length === 0) return {};
-  const list = mints.join(',');
+  if (!mints.length) return {};
   try {
     const res = await fetch(
-      `https://api.coingecko.com/api/v3/simple/token_price/solana?contract_addresses=${list}&vs_currencies=usd`
+      `https://api.coingecko.com/api/v3/simple/token_price/solana?contract_addresses=${mints.join(',')}&vs_currencies=usd`
     );
-    return await res.json();  // { "<mint>": { usd: 1.23 }, ... }
+    return await res.json();
   } catch (e) {
     console.warn('⚠️ fetchTokenPrices failed', e);
     return {};
   }
 }
 
-// ─── Initialize users from Redis + deposit watcher ───────────────────────
+// ─── Initialize users from Redis + on-chain watcher ──────────────────────
 export async function initializeUsers() {
   const handles = await getAllUsers();
   for (const handle of handles) {
@@ -66,15 +97,11 @@ export async function initializeUsers() {
       risk   : data.risk
     });
   }
-
   watchDeposits(users, AGENT_MINT_PK, async (handle, u) => {
     users.set(handle, u);
     await persist(handle, u);
     if (u.auto && u.sol > 0.05) {
-      await enqueueTrade({
-        cmd   : { t:'sell', mint:'So11111111111111111111111111111111111111112', sol:0.02 },
-        handle
-      });
+      await enqueueTrade({ cmd: { t:'sell', mint:'So11111111111111111111111111111111111111112', sol:0.02 }, handle });
     }
   });
 }
@@ -82,15 +109,15 @@ export async function initializeUsers() {
 // ─── Persist helper ───────────────────────────────────────────────────────
 async function persist(handle, u) {
   await upsertUser(handle, {
-    wallet  : JSON.stringify(Array.from(u.wallet.secretKey)),
-    sol     : u.sol.toString(),
-    tierBal : u.tierBal.toString(),
-    auto    : u.auto.toString(),
-    risk    : u.risk
+    wallet:  JSON.stringify(Array.from(u.wallet.secretKey)),
+    sol:     u.sol.toString(),
+    tierBal: u.tierBal.toString(),
+    auto:    u.auto.toString(),
+    risk:    u.risk
   });
 }
 
-// ─── Ensure user + basic getters ─────────────────────────────────────────
+// ─── Ensure & basic getters ───────────────────────────────────────────────
 export async function ensure(handle) {
   let u = users.get(handle);
   if (u) return u;
@@ -100,18 +127,16 @@ export async function ensure(handle) {
   console.log('[NEW]', handle, '→', u.wallet.publicKey.toBase58());
   return u;
 }
-
 export async function walletOf(handle) {
   const u = await ensure(handle);
   return u.wallet.publicKey.toBase58();
 }
-
 export async function balanceOf(handle) {
   const u = await ensure(handle);
-  return { sol:u.sol.toFixed(3), tier:u.tierBal };
+  return { sol: u.sol.toFixed(3), tier: u.tierBal };
 }
 
-// ─── Live updateBalances for on-demand accuracy ─────────────────────────
+// ─── Live on-chain refresh ────────────────────────────────────────────────
 async function updateBalances(handle) {
   const u = users.get(handle) || await ensure(handle);
   const { sol, agentLamports } = await refreshBalances(u, AGENT_MINT_PK);
@@ -121,31 +146,26 @@ async function updateBalances(handle) {
   return { sol, tier: agentLamports };
 }
 
-// ─── Portfolio composition helper including all tokens ──────────────────
+// ─── Build multi-token portfolio snapshot ─────────────────────────────────
 async function getPortfolio(handle) {
   const u = await ensure(handle);
 
-  // 1) SOL balance & price via Binance
+  // SOL price & balance
   const solPrice = await fetchSolPrice();
   const { sol }  = await updateBalances(handle);
   const solUsd   = solPrice != null ? (sol * solPrice).toFixed(2) : 'N/A';
 
-  // 2) SPL token accounts
-  const raw = await conn.getParsedTokenAccountsByOwner(u.wallet.publicKey, {
-    programId: TOKEN_PROGRAM_ID
-  });
+  // SPL balances
+  const raw = await conn.getParsedTokenAccountsByOwner(u.wallet.publicKey, { programId: TOKEN_PROGRAM_ID });
   const balances = {};
   for (const { account } of raw.value) {
     const info = account.data.parsed.info;
     const amt  = parseFloat(info.tokenAmount.uiAmountString);
-    if (amt > 0) {
-      balances[info.mint] = (balances[info.mint] || 0) + amt;
-    }
+    if (amt > 0) balances[info.mint] = (balances[info.mint] || 0) + amt;
   }
-  // fetch USD prices for SPL tokens
-  const mints = Object.keys(balances);
-  const prices = await fetchTokenPrices(mints);
-  // build detailed list
+
+  // token prices
+  const prices = await fetchTokenPrices(Object.keys(balances));
   const tokens = [];
   let totalUsd = solPrice != null ? sol * solPrice : 0;
   for (const [mint, amt] of Object.entries(balances)) {
@@ -156,7 +176,7 @@ async function getPortfolio(handle) {
     totalUsd += parseFloat(usdValue);
   }
 
-  // 3) persist snapshot for analysis
+  // persist for analysis
   const snapshot = { ts: Date.now(), sol, solUsd, tokens };
   await redis.xadd(`portfolio_history:${handle}`, '*', 'data', JSON.stringify(snapshot));
 
@@ -164,7 +184,7 @@ async function getPortfolio(handle) {
 }
 
 // ─── Preference setters ───────────────────────────────────────────────────
-const riskName = r => r==='low' ? 'conservative' : r==='high' ? 'aggressive' : 'balanced';
+const riskName = r => r === 'low' ? 'conservative' : r === 'high' ? 'aggressive' : 'balanced';
 export function toggleAuto(handle, state) {
   const u = users.get(handle);
   u.auto = (typeof state === 'boolean') ? state : !u.auto;
@@ -178,22 +198,7 @@ export function setRisk(handle, level) {
   return { autoTrade: u.auto, risk: riskName(u.risk) };
 }
 
-// ─── AI helper ─────────────────────────────────────────────────────────────
-async function ai(prompt) {
-  const body = {
-    model : OLLAMA_MODEL,
-    prompt: `${PERSONA}\nGoals: ${GOALS}\n\nUser: ${prompt}\nAI:`,
-    stream: false
-  };
-  const r = await fetch(OLLAMA_URL, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(body)
-  });
-  return (await r.json()).response.trim();
-}
-
-// ─── Command dispatchers ───────────────────────────────────────────────────
+// ─── Trade dispatcher ─────────────────────────────────────────────────────
 async function dispatchTrade(cmd, handle, reply) {
   await enqueueTrade({ cmd, handle });
   if (typeof reply === 'function') {
@@ -201,70 +206,102 @@ async function dispatchTrade(cmd, handle, reply) {
   }
 }
 
+// ─── AI / Fallback dispatcher ─────────────────────────────────────────────
 async function dispatchAI(text, handle, reply) {
+  const clean = stripMention(text);
+
+  // 1) Immediate price & portfolio queries
+  if (PRICE_RX.test(clean)) {
+    const price = await fetchSolPrice();
+    return price != null
+      ? reply(`🚀 SOL is currently $${price.toFixed(2)} USD.`)
+      : reply('❌ Could not fetch SOL price right now.');
+  }
+  if (PORT_RX.test(clean)) {
+    const p = await getPortfolio(handle);
+    let resp = `**Portfolio (Total $${p.totalUsd})**\n• SOL: ${p.sol.toFixed(3)} (~$${p.solUsd})\n`;
+    for (const t of p.tokens) {
+      resp += `• ${t.mint.slice(0,6)}…: ${t.amount} @ $${t.price} → $${t.usdValue}\n`;
+    }
+    return reply(resp);
+  }
+
+  // 2) Otherwise, full LLM conversation with injected real-time data
   try {
-    const answer = await ai(text);
+    // record user
+    await remember({ handle, text, ts: Date.now() });
+    // recall history
+    const history = await recall(handle, 10);
+    let context = '';
+    for (const msg of history) context += `User: ${msg.text}\n`;
+    // inject live facts
+    const priceNow = await fetchSolPrice();
+    const port     = await getPortfolio(handle);
+    const portLines= [
+      `SOL:  ${port.sol.toFixed(3)}  (~$${port.solUsd})`,
+      ...port.tokens.map(t =>
+        `${t.mint.slice(0,6)}… : ${t.amount} @ $${t.price} = $${t.usdValue}`
+      )
+    ].join('\n');
+    context += `User: ${text}\n\n` +
+               `### Real-time facts\n` +
+               `SOL price: $${priceNow ?? 'N/A'}\n` +
+               `Portfolio:\n${portLines}\n` +
+               `AI:`;
+
+    const body = { model: OLLAMA_MODEL, prompt: `${PERSONA}\nGoals: ${GOALS}\n\n${context}`, stream: false };
+    const res = await fetch(OLLAMA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const answer = (await res.json()).response.trim();
     reply(answer);
+    await remember({ handle, text: answer, ts: Date.now() });
   } catch (err) {
     console.error('[AI error]', err);
     reply('🤖 …sorry, I had a brain-freeze.');
   }
 }
 
-// ─── Parser & handler ──────────────────────────────────────────────────────
-const BUY_RX    = /(?:\/buy|buy)\s+([A-Za-z0-9]{32,44})\s+([\d.]+)/i;
-const SELL_RX   = /(?:\/sell|sell)\s+([A-Za-z0-9]{32,44})\s+([\d.]+)/i;
-const DEP_RX    = /\b(deposit|wallet)\b/i;
-const BAL_RX    = /\bbalance\b/i;
-const PORT_RX   = /\b(?:holdings|portfolio|how much i hold)\b/i;
-const PRICE_RX  = /\b(?:sol price|price of solana)\b/i;
-const AUTO_RX   = /\bauto(?:trade)?\s*(on|off)\b/i;
-const RISK_RX   = /\brisk\s*(low|med|high)\b/i;
-const TW_HANDLE = (process.env.AGENT_TW_HANDLE||'').toLowerCase();
-
-function stripMention(txt) {
-  return TW_HANDLE ? txt.replace(new RegExp(`@${TW_HANDLE}`,'ig'), '').trim() : txt;
-}
-
-function parseTxt(msg) {
-  const clean = stripMention(msg);
-  if (BUY_RX.test(clean))    { const [,m,s]=clean.match(BUY_RX);    return { t:'buy',       mint:m, sol:+s }; }
-  if (SELL_RX.test(clean))   { const [,m,s]=clean.match(SELL_RX);   return { t:'sell',      mint:m, sol:+s }; }
-  if (DEP_RX.test(clean))    return { t:'deposit' };
-  if (BAL_RX.test(clean))    return { t:'balance' };
-  if (PORT_RX.test(clean))   return { t:'portfolio' };
-  if (PRICE_RX.test(clean))  return { t:'price' };
-  const a = clean.match(AUTO_RX); if (a) return { t:'auto',  val:a[1] };
-  const b = clean.match(RISK_RX); if (b) return { t:'risk',  val:b[1] };
-  return null;
-}
-
+// ─── Top‐level handler ────────────────────────────────────────────────────
 export async function handleMessage(m) {
-  await remember({ handle:m.handle, text:m.text||'', ts:Date.now() });
-
   // 1) button payload
   if (m.button) {
-    const [,act,arg] = m.button.split('::');
+    const [, act, arg] = m.button.split('::');
     const h = m.handle;
-    if (act==='AUTO')
-      return m.reply(`Auto-trading *${toggleAuto(h,arg==='on').autoTrade?'ENABLED ✅':'DISABLED ❌'}*`, { parse_mode:'Markdown' });
-    if (act==='RISK')
-      return m.reply(`Risk profile → *${setRisk(h,arg).risk}*`, { parse_mode:'Markdown' });
+    if (act === 'AUTO')
+      return m.reply(`Auto-trading *${toggleAuto(h, arg==='on').autoTrade ? 'ENABLED ✅' : 'DISABLED ❌'}*`);
+    if (act === 'RISK')
+      return m.reply(`Risk profile → *${setRisk(h, arg).risk}*`);
     if (act==='QBUY'||act==='QSELL') {
-      const side = act==='QBUY'?'buy':'sell';
+      const side = act==='QBUY' ? 'buy' : 'sell';
       return dispatchTrade({ t:side, mint:arg, sol:0.10 }, h, m.reply);
     }
   }
 
   // 2) text commands
-  const cmd = m.text && parseTxt(m.text);
+  const txt   = m.text ?? '';
+  const clean = stripMention(txt);
+  let cmd     = null;
+  if (BUY_RX.test(clean))         { const [,m,s]=clean.match(BUY_RX);    cmd={ t:'buy',    mint:m, sol:+s }; }
+  else if (SELL_RX.test(clean))   { const [,m,s]=clean.match(SELL_RX);   cmd={ t:'sell',   mint:m, sol:+s }; }
+  else if (DEP_RX.test(clean))    cmd = { t:'deposit' };
+  else if (BAL_RX.test(clean))    cmd = { t:'balance' };
+  else if (PORT_RX.test(clean))   cmd = { t:'portfolio' };
+  else if (PRICE_RX.test(clean))  cmd = { t:'price' };
+  else {
+    const a = clean.match(AUTO_RX); if (a) cmd = { t:'auto', val:a[1] };
+    const b = clean.match(RISK_RX); if (b) cmd = { t:'risk', val:b[1] };
+  }
+
   if (cmd) {
     switch (cmd.t) {
       case 'deposit':
-        return m.reply(`🔑 Deposit address:\n${await walletOf(m.handle)}`);  
+        return m.reply(`🔑 Deposit address:\n${await walletOf(m.handle)}`);
       case 'balance': {
         const b = await updateBalances(m.handle);
-        return m.reply(`Wallet SOL: ${b.sol.toFixed(3)}\nAgent tokens: ${b.tier}`);  
+        return m.reply(`Wallet SOL: ${b.sol.toFixed(3)}\nAgent tokens: ${b.tier}`);
       }
       case 'portfolio': {
         const p = await getPortfolio(m.handle);
@@ -272,32 +309,32 @@ export async function handleMessage(m) {
         for (const t of p.tokens) {
           resp += `• ${t.mint.slice(0,6)}…: ${t.amount} @ $${t.price} → $${t.usdValue}\n`;
         }
-        return m.reply(resp, { parse_mode:'Markdown' });
+        return m.reply(resp);
       }
       case 'price': {
         const price = await fetchSolPrice();
         return price != null
-          ? m.reply(`🚀 SOL is currently $${price.toFixed(2)} USD.`, { parse_mode:'Markdown' })
+          ? m.reply(`🚀 SOL is currently $${price.toFixed(2)} USD.`)
           : m.reply('❌ Could not fetch SOL price right now.');
       }
       case 'auto':
-        return m.reply(
-          `Auto-trading *${toggleAuto(m.handle, cmd.val === 'on').autoTrade?'ENABLED ✅':'DISABLED ❌'}*`,
-          { parse_mode:'Markdown' }
-        );
+        return m.reply(`Auto-trading *${toggleAuto(m.handle, cmd.val==='on').autoTrade ? 'ENABLED ✅' : 'DISABLED ❌'}*`);
       case 'risk':
-        return m.reply(
-          `Risk profile → *${setRisk(m.handle, cmd.val).risk}*`,
-          { parse_mode:'Markdown' }
-        );
-      case 'buy':
-      case 'sell':
+        return m.reply(`Risk profile → *${setRisk(handle, cmd.val).risk}*`);
+      case 'buy': case 'sell':
         return dispatchTrade(cmd, m.handle, m.reply);
+      default:
+        break;
     }
   }
 
   // 3) fallback → AI
-  if (m.text) {
-    return dispatchAI(m.text, m.handle, m.reply);
-  }
+  return dispatchAI(txt, m.handle, m.reply);
 }
+
+// ─── Explicit exports for index.js ────────────────────────────────────────
+export {
+  fetchSolPrice,
+  getPortfolio,
+  recall
+};

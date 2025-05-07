@@ -1,3 +1,11 @@
+
+<!-- Badges -->
+
+[![Build Status](https://img.shields.io/github/actions/workflow/status/your-org/launcher-api/ci.yml?branch=main)]()
+[![npm version](https://img.shields.io/npm/v/launcher-api)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]()
+[![Coverage Status](https://img.shields.io/coveralls/github/your-org/launcher-api)]()
+
 # Launcher API README
 
 ## Overview
@@ -10,21 +18,43 @@ The **Launcher API** is an Express-based microservice that handles:
 * **Raydium Launchpad pool management** (create, buy, sell)
 * **Full end-to-end launch** (token + pool)
 
-The service is secured by per-user API keys (rotating every 2h) and integrates with Redis for storage, Solana for on-chain actions, and an external image generation API for token logos.
+The service is secured by per-user API keys (rotating every 2h), integrates with Redis for storage, Solana for on-chain actions, and an external image generation API for token logos. It also includes reCAPTCHA protection, CORS configuration, and a firewall module for monitoring and alerting on critical failures.
+
+---
+
+## Table of Contents
+
+1. [Badges](#badges)
+2. [Overview](#overview)
+3. [Environment Variables](#environment-variables)
+4. [Setup & Run](#setup--run)
+5. [API Endpoints](#api-endpoints)
+6. [Architecture Flows](#architecture-flows)
+
+   1. [Main Flow](#main-flow)
+   2. [Siren Alert Flow](#siren-alert-flow)
+7. [Detailed Flow Description](#detailed-flow-description)
+8. [Error Handling & Logging](#error-handling--logging)
+9. [Security Considerations](#security-considerations)
+10. [Monitoring & Alerts](#monitoring--alerts)
+11. [Contact](#contact)
 
 ---
 
 ## Environment Variables
 
-| Variable                | Description                                                      |
-| ----------------------- | ---------------------------------------------------------------- |
-| `RPC_URL`               | Solana RPC endpoint (e.g. `https://api.mainnet-beta.solana.com`) |
-| `REDIS_URL`             | Redis connection string (e.g. `redis://localhost:6379`)          |
-| `PLATFORM_PRIVATE_KEY`  | Base58 secret key for the platform's Solana account              |
-| `DEV_LAUNCHPAD_PROGRAM` | Raydium Launchpad program ID                                     |
-| `BONDING_CURVE`         | One of `LINEAR` / `EXPONENTIAL` / `LOGARITHMIC`                  |
-| `IMAGE_API_ROOT`        | Base URL for image gen API (text-to-image)                       |
-| `PORT`                  | HTTP port for the server (default `3989`)                        |
+| Variable                | Description                                                             | Required / Default                            |
+| ----------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
+| `RPC_URL`               | Solana RPC endpoint (e.g. `https://api.mainnet-beta.solana.com`)        | **Required**                                  |
+| `REDIS_URL`             | Redis connection string (e.g. `redis://localhost:6379`)                 | **Required**                                  |
+| `PLATFORM_PRIVATE_KEY`  | Base58 or JSON-array secret key for the platform’s Solana account       | **Required**                                  |
+| `DEV_LAUNCHPAD_PROGRAM` | Raydium Launchpad program ID                                            | **Required**                                  |
+| `IMAGE_API_ROOT`        | Base URL for image generation API (text-to-image)                       | **Required**                                  |
+| `METADATA_BASE_URL`     | Base URL for on-chain token metadata website                            | Optional, defaults to `https://myplatform.io` |
+| `RECAPTCHA_SECRET`      | Google reCAPTCHA v3 secret key; enables CAPTCHA middleware              | Optional, CAPTCHA disabled if unset           |
+| `BONDING_CURVE`         | One of `LINEAR` / `EXPONENTIAL` / `LOGARITHMIC`; defaults to `LINEAR`   | Optional                                      |
+| `CORS_ORIGIN`           | Allowed CORS origin (e.g. `https://app.myplatform.io`); defaults to `*` | Optional                                      |
+| `PORT`                  | HTTP port for the server                                                | Optional, defaults to `3989`                  |
 
 ---
 
@@ -35,7 +65,9 @@ The service is secured by per-user API keys (rotating every 2h) and integrates w
    ```bash
    npm install
    ```
-2. **Configure `.env`** (see above variables)
+
+2. **Configure `.env`** (see [Environment Variables](#environment-variables))
+
 3. **Start the server**
 
    ```bash
@@ -46,28 +78,17 @@ The service is secured by per-user API keys (rotating every 2h) and integrates w
 
 ## API Endpoints
 
-All protected endpoints require two HTTP headers:
+All **protected** endpoints require two HTTP headers:
 
 * `x-user-id`: the user identifier (string)
 * `x-api-key`: the per-user API key (expires in 2h)
 
 ### Public
 
-| Method | Path           | Description                                |
-| ------ | -------------- | ------------------------------------------ |
-| `POST` | `/get-api-key` | Returns a fresh API key for the given user |
-
-### Subdomain Metadata
-
-If a request comes in to `<MINT>.tokens.myplatform.io`, the server will look up `tokenmeta:<MINT>` in Redis and return:
-
-```json
-{
-  "name": "MyToken",
-  "image": "https://.../images/<file>.png",
-  "website": "https://myplatform.io/token/<MINT>"
-}
-```
+| Method | Path                     | Description                                    |
+| ------ | ------------------------ | ---------------------------------------------- |
+| `POST` | `/get-api-key`           | Returns a fresh API key for the given `userId` |
+| `GET`  | `/:mint` (via subdomain) | Returns cached metadata for token `<mint>`     |
 
 ### Protected
 
@@ -81,7 +102,9 @@ If a request comes in to `<MINT>.tokens.myplatform.io`, the server will look up 
 
 ---
 
-## Architecture Flow
+## Architecture Flows
+
+### Main Flow
 
 ```mermaid
 flowchart LR
@@ -123,16 +146,33 @@ flowchart LR
   S -->|generateImage| E
   S -->|hSet metadata| R
   S -->|createLaunchpadPool| B
-
 ```
 
-**Legend:**
+#### Legend
 
 * **User**: External client (frontend, curl)
 * **API Server**: Express service in `/launcher/server.js`
 * **Redis**: `apikey:*`, `wallet:*`, `tokenmeta:*`
 * **Solana RPC**: On-chain transaction execution
-* **Image API**: Third‑party text‑to‑image for logos
+* **Image API**: Third-party text-to-image for logos
+
+---
+
+### Alert Flow
+
+This flow illustrates how critical errors and security events trigger the internal `firewall` module and escalate to an external alerting system.
+
+```mermaid
+flowchart TD
+  classDef server fill:#dfd,stroke:#090,stroke-width:2px,color:#000;
+  classDef firewall fill:#fdd,stroke:#900,stroke-width:2px,color:#000;
+  classDef alert   fill:#ffd,stroke:#990,stroke-width:2px,color:#000;
+
+  A[Error / Suspicious Event]:::server -->|firewall.onError / onSpam / onCritical| F[Firewall Module]:::firewall
+  F -->|Log to internal store| R[(Redis)]
+  F -->|Push to SIEM / PagerDuty| P[External Alert System]:::alert
+  P -->|Notify on-call team via SMS / Email| T[Ops Team]
+```
 
 ---
 
@@ -140,64 +180,67 @@ flowchart LR
 
 1. **API Key Generation** (`POST /get-api-key`)
 
-   * Client submits `userId`.
-   * Server generates a random 32‑byte hex key, stores under `apikey:<userId>` with 2h TTL.
+   * Client submits `{ userId }` and a valid reCAPTCHA token in `x-captcha-token`.
+   * Server verifies CAPTCHA (`verifyRecaptcha`) and throttles on failures.
+   * Generates a 32-byte hex key, stores under `apikey:<userId>` with 2h TTL.
    * Returns `{ userId, apiKey, expiresIn: 7200 }`.
 
 2. **Authentication Middleware**
 
-   * All protected routes verify `x-user-id` + `x-api-key` against Redis.
-   * Rejects with 403 if invalid or missing.
+   * Verifies `x-user-id` + `x-api-key` against Redis.
+   * Blocks with 403 if invalid or missing.
 
-3. **Subdomain Metadata**
+3. **reCAPTCHA Protection**
 
-   * On every request, server inspects hostname: if `<mint>.<...>` where `mint` matches base58 length,
-     loads token metadata from Redis and returns immediately.
+   * Every protected route runs `captchaMiddleware`.
+   * Tracks failure count per IP in Redis (`captcha:fail:<ip>`) and raises challenge requirements.
+   * Resets on success; blocks or increases challenges on repeat failures.
 
-4. **Create Token** (`POST /create-token`)
+4. **Subdomain Metadata**
 
-   * Extracts `decimals`, `supply`, `tokenName`.
-   * Retrieves user's Solana `Keypair` from `wallet:<userId>` in Redis.
-   * Calls `createMint`, `getOrCreateAssociatedTokenAccount`, `mintTo`.
-   * Requests a logo from the Image API (`prompt = "Logo for token <name>"`).
-   * Stores metadata `{name,image,website}` in `tokenmeta:<mint>`.
-   * Responds with mint address, token account, logo URL, and website URL.
+   * Hostname pattern `<mint>.tokens.myplatform.io` triggers immediate metadata lookup.
+   * Returns JSON from `tokenmeta:<mint>`.
 
-5. **Create Pool** (`POST /create-pool`)
+5. **Create Token** (`POST /create-token`)
 
-   * Validates pool parameters (mints, supply, curve, timing).
-   * Uses `PlatformConfig` (fees: 3% base, 30% creator, 50% platform, 20% burn).
-   * Calls `createLaunchpadPool` from Raydium SDK.
-   * Signs & sends transaction; returns signature.
+   * Inputs: `decimals`, `supply`, `tokenName`.
+   * Retrieves `Keypair` from `wallet:<userId>`.
+   * Mints SPL token, creates ATA, and mints initial supply.
+   * Generates logo via external API (`generateImage`).
+   * Stores metadata in Redis and returns mint details.
 
-6. **Buy / Sell** (`POST /buy-token`, `/sell-token`)
+6. **Create Pool** (`POST /create-pool`)
 
-   * Retrieves user Keypair.
-   * Fetches ATA for pool token.
-   * Calls `buyLaunchpadToken` / `sellLaunchpadToken`.
-   * Signs & sends; returns signature.
+   * Inputs: pool parameters including `curveType`, timings, and scales.
+   * Constructs `PlatformConfig` and calls Raydium SDK.
+   * Signs, sends transaction, returns signature.
 
-7. **Full Launch** (`POST /launch-token`)
+7. **Buy / Sell Token** (`POST /buy-token`, `/sell-token`)
 
-   * Combines steps 4 + 5.
-   * Mints token + metadata + pool in one request.
+   * Fetches user ATA, constructs and sends Raydium SDK transactions.
+   * Returns on-chain signature.
+
+8. **Full Launch** (`POST /launch-token`)
+
+   * Combines token minting + pool creation in one atomic endpoint.
 
 ---
 
 ## Error Handling & Logging
 
-* All endpoints catch exceptions and return `500 { error: message }`.
-* Redis connection failures, missing keys, and RPC errors bubble up.
+* All routes catch exceptions and respond with `500 { error: message }`.
+* `firewall` module classifies events as **spam**, **error**, or **critical**.
+* Critical failures (`onCritical`) trigger process exit or external alerts.
+* All Redis/RPC failures are logged and optionally notified.
 
 ---
 
 ## Security Considerations
 
-* **API Keys**: rotating every 2h, limiting frontend exposure.
-* **Redis**: single source for state (wallets, metadata, API keys).
-* **No plaintext keys** in code; platform key read from `PLATFORM_PRIVATE_KEY` in `.env`.
-* **Subdomain isolation**: public metadata served without auth.
+* **API Keys**: rotate every 2h, stored in Redis with TTL.
+* **reCAPTCHA**: adaptive challenge based on failure count.
+* **CORS**: configurable allowed origins (`CORS_ORIGIN`).
+* **Firewall**: centralized handling of suspicious or critical events.
+* **No plaintext keys**: platform key loaded only from environment.
 
 ---
-
-For any questions or issues, reach out to the core team.

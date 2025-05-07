@@ -1,27 +1,22 @@
-// api‑server.js — “paranoid‑mode” REST gateway for the React dashboard
-// -----------------------------------------------------------------------------
-
 import 'dotenv/config';
-import fs         from 'fs';
-import http       from 'http';
-import crypto     from 'crypto';
-
-import express    from 'express';
-import helmet     from 'helmet';
-import cors       from 'cors';
-import hpp        from 'hpp';
-import xssClean   from 'xss-clean';
+import http from 'http';
+import crypto from 'crypto';
+import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import hpp from 'hpp';
+import xss from 'xss';    
 import mongoSanitize from 'express-mongo-sanitize';
 import { expressCspHeader } from 'express-csp-header';
 import cookieParser from 'cookie-parser';
-import csurf      from 'csurf';
-import rateLimit  from 'express-rate-limit';
+import csurf from 'csurf';
+import rateLimit from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
-import Redis      from 'ioredis';
-import morgan     from 'morgan';
-import winston    from 'winston';
-import { ulid }   from 'ulid';
-import { z }      from 'zod';
+import Redis from 'ioredis';
+import morgan from 'morgan';
+import winston from 'winston';
+import { ulid } from 'ulid';
+import { z } from 'zod';
 
 import {
   walletOf,
@@ -33,147 +28,507 @@ import {
   handleMessage
 } from './commands.js';
 
-// ─────────────────────────────  ENV  ─────────────────────────────
-const {
-  REDIS_URL         = 'redis://localhost:6379',
-  API_PORT          = 4000,
-  CORS_ORIGIN       = '*',
-  RATE_LIMIT_POINTS = 200,
-  RATE_LIMIT_WINDOW = 15 * 60, // s
-  JWT_BASE_SECRET,
-  CSRF_COOKIE       = 'csrf_tok'
-} = process.env;
+// Environment validation with better error handling
+const envSchema = z.object({ 
+  REDIS_URL: z.string().url().default('redis://localhost:6379'),
+  API_PORT: z.coerce.number().default(4000),
+  CORS_ORIGIN: z.string().url().optional(),
+  RATE_LIMIT_POINTS: z.coerce.number().default(200),
+  RATE_LIMIT_WINDOW: z.coerce.number().default(900),
+  JWT_BASE_SECRET: z.string().min(32).catch(() => crypto.randomBytes(32).toString('hex')),
+  CSRF_COOKIE: z.string().default('csrf_tok'),
+  LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info')
+});
 
-if (!JWT_BASE_SECRET) {
-  console.error('[API] FATAL: JWT_BASE_SECRET env var missing');
+let env;
+try {
+  env = envSchema.parse(process.env);
+} catch (err) {
+  console.error('Environment validation failed:', err.message);
   process.exit(1);
 }
 
-// ───────────────────────────  LOGGING  ──────────────────────────
+// Configure logging
 const log = winston.createLogger({
-  level : 'info',
-  format: winston.format.json(),
-  transports: [new winston.transports.Console()]
+  level: env.LOG_LEVEL,
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    }),
+    new winston.transports.File({ 
+      filename: 'error.log', 
+      level: 'error' 
+    })
+  ]
 });
 
-morgan.token('rid', req => req.id);
+// Custom morgan token for request ID
+morgan.token('rid', (req) => req.id);
+
+// JSON request logger
 const reqLogger = morgan(
   '{"time":":date[iso]","rid":":rid","method":":method","url":":url","status":":status","size":":res[content-length]"}',
   { stream: { write: line => log.info(JSON.parse(line)) } }
 );
 
-// ───────────────────────────  APP  ─────────────────────────────
-const app  = express();
-const redis = new Redis(REDIS_URL);
+// Initialize Express app and Redis
+const app = express();
+let redis;
 
+try {
+  redis = new Redis(env.REDIS_URL);
+  redis.on('error', (err) => {
+    log.error({ msg: 'Redis error', error: err.message });
+  });
+} catch (err) {
+  log.error({ msg: 'Redis connection failed', error: err.message });
+  process.exit(1);
+}
+
+// Configure proxy trust with specific conditions
+app.set('trust proxy', (ip) => {
+  return ip === '127.0.0.1' || 
+         ip === '::1' ||
+         ip.startsWith('10.') || 
+         ip.startsWith('172.16.') || 
+         ip.startsWith('192.168.');
+});
+
+// Basic security setup
 app.disable('x-powered-by');
 
-// ULID por request
-app.use((req, _res, next) => { req.id = ulid(); next(); });
-// JSON access logs
+// Request ID middleware
+app.use((req, _res, next) => { 
+  req.id = ulid(); 
+  next(); 
+});
+
+// Logging middleware
 app.use(reqLogger);
 
-// Seguridad de cabeceras
+// Security headers with updated CSP for development
 app.use(helmet());
 app.use(expressCspHeader({
   directives: {
     'default-src': ["'self'"],
     'frame-ancestors': ["'none'"],
-    'script-src': ["'self'"],
-    'object-src': ["'none'"]
+    'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+    'object-src': ["'none'"],
+    'base-uri': ["'none'"],
+    'form-action': ["'self'"]
   }
 }));
 
-// Sanitización
+// Sanitization stack
 app.use(hpp());
-app.use(xssClean());
-app.use(mongoSanitize());
+app.use((req, _res, next) => {
+  if (req.body) mongoSanitize.sanitize(req.body);
+  if (req.params) mongoSanitize.sanitize(req.params);
+  next();
+});
 
-// Body & cookies
+// XSS protection
+app.use((req, _res, next) => {
+  const scrub = obj => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (typeof v === 'string') obj[k] = xss(v);
+      else if (typeof v === 'object') scrub(v);
+    }
+  };
+  scrub(req.body);
+  scrub(req.params);
+  next();
+});
+
+// Body parser and cookies
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-// CORS whitelisting
+// Updated CORS configuration
 app.use(cors({
-  origin: CORS_ORIGIN.split(','),
-  credentials: true
+  origin: env.CORS_ORIGIN || true,
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+  credentials: true,
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization',
+    'X-CSRF-Token',
+    'Accept'
+  ],
+  maxAge: 86400,
+  optionsSuccessStatus: 200
 }));
 
-// Rate‑limit global
+// Rate limiting
 app.use(rateLimit({
-  windowMs : RATE_LIMIT_WINDOW * 1000,
-  max      : RATE_LIMIT_POINTS,
+  windowMs: env.RATE_LIMIT_WINDOW * 1000,
+  max: env.RATE_LIMIT_POINTS,
   standardHeaders: true,
-  legacyHeaders  : false,
-  store: new RedisStore({ sendCommand: (...a) => redis.call(...a) })
+  legacyHeaders: false,
+  store: new RedisStore({ 
+    sendCommand: (...args) => redis.call(...args),
+    prefix: 'rl:',
+    keyPrefix: (req) => {
+      const ip = req.ip;
+      return `${ip}:`;
+    }
+  })
 }));
 
-// CSRF doble cookie
+// CSRF protection
 const csrfProtection = csurf({
-  cookie: { key: CSRF_COOKIE, httpOnly: false, sameSite: 'strict', secure: false }
+  cookie: { 
+    key: env.CSRF_COOKIE,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production'
+  }
 });
+
 app.use((req, res, next) => {
-  if (!req.cookies[CSRF_COOKIE]) {
-    res.cookie(CSRF_COOKIE, crypto.randomBytes(16).toString('hex'), {
-      httpOnly: false, sameSite: 'strict', secure: false
+  if (!req.cookies[env.CSRF_COOKIE]) {
+    res.cookie(env.CSRF_COOKIE, crypto.randomBytes(32).toString('hex'), {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
     });
   }
   next();
 });
 
-// ─────────────────────  JWT con clave rotativa diaria  ───────────
-const jwtHeader = Buffer.from(JSON.stringify({ alg:'HS256', typ:'JWT' })).toString('base64url');
-function dayKey(day){ return crypto.hkdfSync('sha256', Buffer.from(JWT_BASE_SECRET), Buffer.alloc(0), Buffer.from(String(day)), 32); }
-function signToken(handle){
-  const payload = Buffer.from(JSON.stringify({ sub:handle, exp:Math.floor(Date.now()/1000)+7200 })).toString('base64url');
-  const sig = crypto.createHmac('sha256', dayKey(Math.floor(Date.now()/86400000))).update(`${jwtHeader}.${payload}`).digest('base64url');
-  return `${jwtHeader}.${payload}.${sig}`;
-}
-function verifyToken(tok){
-  const [ , pl, sig] = tok.split('.');
-  const { exp, sub } = JSON.parse(Buffer.from(pl,'base64url').toString());
-  if(Date.now()/1000>exp) throw 'exp';
-  const key = dayKey(Math.floor(exp/86400));
-  const expSig = crypto.createHmac('sha256',key).update(`${jwtHeader}.${pl}`).digest('base64url');
-  if(!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expSig))) throw 'sig';
-  return sub;
-}
-function auth(req,res,next){
-  try{ req.user = verifyToken((req.headers.authorization||'').replace(/^Bearer /,'')); next(); }
-  catch{ res.status(401).json({error:'unauthorized'}); }
+// JWT helpers with improved error handling
+const jwtHeader = Buffer.from(
+  JSON.stringify({ alg: 'HS256', typ: 'JWT' })
+).toString('base64url');
+
+function dayKey(day) {
+  try {
+    return crypto.hkdfSync(
+      'sha256',
+      Buffer.from(env.JWT_BASE_SECRET),
+      Buffer.alloc(0),
+      Buffer.from(String(day)),
+      32
+    );
+  } catch (err) {
+    log.error({ msg: 'JWT key generation failed', error: err.message });
+    throw new Error('token_error');
+  }
 }
 
-// ─────────────────────  ZOD Schemas  ───────────────────────────
-const schemaAuth  = z.object({ handle:z.string().min(2).max(32) });
-const schemaAuto  = z.object({ on:z.boolean() });
-const schemaRisk  = z.object({ level:z.enum(['low','med','high']) });
-const schemaTrade = z.object({ side:z.enum(['buy','sell']), mint:z.string().length(44), sol:z.number().positive().max(10) });
+function signToken(handle) {
+  try {
+    const payload = Buffer.from(
+      JSON.stringify({
+        sub: handle,
+        exp: Math.floor(Date.now() / 1000) + 7200,
+        iat: Math.floor(Date.now() / 1000)
+      })
+    ).toString('base64url');
 
-// ─────────────────────  Routes  ────────────────────────────────
-// Public – token issuance (la UI debe validar propiedad antes)
-app.post('/auth', csrfProtection, (req,res)=>{
-  const p=schemaAuth.safeParse(req.body); if(!p.success) return res.status(400).json({error:'invalid'});
-  res.json({ token:signToken(p.data.handle.toLowerCase()), expiresIn:7200 });
+    const sig = crypto
+      .createHmac('sha256', dayKey(Math.floor(Date.now() / 86400000)))
+      .update(`${jwtHeader}.${payload}`)
+      .digest('base64url');
+
+    return `${jwtHeader}.${payload}.${sig}`;
+  } catch (err) {
+    log.error({ msg: 'Token signing failed', error: err.message });
+    throw new Error('token_error');
+  }
+}
+
+function verifyToken(tok) {
+  try {
+    const [, pl, sig] = tok.split('.');
+    if (!pl || !sig) throw new Error('invalid_token_format');
+    
+    const { exp, sub } = JSON.parse(Buffer.from(pl, 'base64url').toString());
+    if (!exp || !sub) throw new Error('invalid_token_payload');
+
+    if (Date.now() / 1000 > exp) throw new Error('token_expired');
+
+    const key = dayKey(Math.floor(exp / 86400));
+    const expSig = crypto
+      .createHmac('sha256', key)
+      .update(`${jwtHeader}.${pl}`)
+      .digest('base64url');
+
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expSig)))
+      throw new Error('invalid_signature');
+
+    return sub;
+  } catch (err) {
+    log.error({ msg: 'Token verification failed', error: err.message });
+    throw new Error('token_error');
+  }
+}
+
+// Auth middleware with improved error handling
+function auth(req, res, next) {
+  try {
+    const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+    if (!token) {
+      return res.status(401).json({ 
+        error: 'unauthorized',
+        details: 'No token provided'
+      });
+    }
+    req.user = verifyToken(token);
+    next();
+  } catch (err) {
+    log.warn({ msg: 'Auth failed', error: err.message, rid: req.id });
+    res.status(401).json({ 
+      error: 'unauthorized',
+      details: err.message === 'token_expired' ? 'Token expired' : 'Invalid token'
+    });
+  }
+}
+
+// Request validation schemas
+const schemaAuth = z.object({ 
+  handle: z.string().min(2).max(32).regex(/^@[a-zA-Z0-9_]+$/),
+  method: z.enum(['telegram', 'twitter'])
 });
 
-// Resto requiere Bearer + CSRF
-app.use(auth, csrfProtection, (req,res,next)=>{
-  if(req.get('x-csrf-token')!==req.cookies[CSRF_COOKIE]) return res.status(403).json({error:'csrf'});
+const schemaAuto = z.object({ on: z.boolean() });
+const schemaRisk = z.object({ level: z.enum(['low', 'med', 'high']) });
+const schemaTrade = z.object({ 
+  side: z.enum(['buy', 'sell']),
+  mint: z.string().length(44).regex(/^[A-Za-z0-9]+$/),
+  sol: z.number().positive().max(10)
+});
+
+// Routes with improved error handling
+app.post('/auth', csrfProtection, async (req, res) => {
+  try {
+    log.debug({
+      msg: 'Auth request received',
+      rid: req.id,
+      body: req.body
+    });
+
+    const p = schemaAuth.safeParse(req.body);
+    if (!p.success) {
+      log.warn({ 
+        msg: 'Invalid auth data', 
+        rid: req.id,
+        errors: p.error.errors,
+        body: req.body 
+      });
+      return res.status(400).json({ 
+        error: 'invalid',
+        details: p.error.errors
+      });
+    }
+
+    const { handle, method } = p.data;
+    const requestOrigin = req.get('origin') || '*';
+    log.info({ 
+      msg: 'Auth attempt',
+      handle,
+      method,
+      origin: requestOrigin,
+      rid: req.id,
+      ip: req.ip,
+      userAgent: req.get('user-agent')
+    });
+
+    let token;
+    try {
+      token = signToken(handle.toLowerCase());
+      log.debug({
+        msg: 'Token generated',
+        rid: req.id,
+        handle: handle.toLowerCase()
+      });
+    } catch (tokenErr) {
+      log.error({
+        msg: 'Token generation failed',
+        rid: req.id,
+        error: tokenErr.message,
+        stack: tokenErr.stack
+      });
+      return res.status(500).json({ 
+        error: 'token_error',
+        details: 'Failed to generate authentication token'
+      });
+    }
+
+    res.json({ 
+      token,
+      expiresIn: 7200,
+      method
+    });
+
+    log.info({
+      msg: 'Auth success',
+      rid: req.id,
+      handle,
+      method
+    });
+  } catch (err) {
+    log.error({ 
+      msg: 'Auth error', 
+      error: err.message, 
+      stack: err.stack,
+      rid: req.id,
+      body: req.body,
+      headers: {
+        csrf: req.get('x-csrf-token'),
+        origin: req.get('origin'),
+        referer: req.get('referer')
+      }
+    });
+    res.status(500).json({ 
+      error: 'server_error',
+      details: 'Internal server error during authentication'
+    });
+  }
+});
+
+// Protected routes
+app.use(auth, csrfProtection, (req, res, next) => {
+  const token = req.get('x-csrf-token');
+  const storedToken = req.cookies[env.CSRF_COOKIE] || '';
+
+  if (!token || !storedToken || token !== storedToken) {
+    log.warn({ 
+      msg: 'CSRF mismatch', 
+      rid: req.id,
+      token: !!token,
+      storedToken: !!storedToken
+    });
+    return res.status(403).json({ error: 'csrf' });
+  }
   next();
 });
 
-app.get('/wallet',    async (r,s)=>s.json({addr:await walletOf(r.user)}));
-app.get('/balance',   async (r,s)=>s.json(await balanceOf(r.user)));
-app.get('/portfolio', async (r,s)=>s.json(await getPortfolio(r.user)));
-app.get('/sol-price', async (_ ,s)=>s.json({usd:await fetchSolPrice()}));
+// API endpoints
+app.get('/wallet', async (req, res) => {
+  try {
+    res.json({ addr: await walletOf(req.user) });
+  } catch (err) {
+    log.error({ msg: 'Wallet error', error: err.message, rid: req.id });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
 
-app.post('/auto', (r,s)=>{ const p=schemaAuto.safeParse(r.body); if(!p.success)return s.status(400).json({error:'invalid'}); s.json(toggleAuto(r.user,p.data.on)); });
-app.post('/risk', (r,s)=>{ const p=schemaRisk.safeParse(r.body); if(!p.success)return s.status(400).json({error:'invalid'}); s.json(setRisk(r.user,p.data.level)); });
-app.post('/trade',async (r,s)=>{ const p=schemaTrade.safeParse(r.body); if(!p.success)return s.status(400).json({error:'invalid'}); const {side,mint,sol}=p.data; await handleMessage({handle:r.user,button:side==='buy'?`BTN::QBUY::${mint}::${r.user}`:`BTN::QSELL::${mint}::${r.user}`,reply:()=>{}}); s.json({queued:true}); });
+app.get('/balance', async (req, res) => {
+  try {
+    res.json(await balanceOf(req.user));
+  } catch (err) {
+    log.error({ msg: 'Balance error', error: err.message, rid: req.id });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
 
-app.get('/health', (_ ,s)=>s.json({ok:true,ts:Date.now()}));
-app.get('/metrics',(_ ,s)=>s.redirect('/metrics'));
+app.get('/portfolio', async (req, res) => {
+  try {
+    res.json(await getPortfolio(req.user));
+  } catch (err) {
+    log.error({ msg: 'Portfolio error', error: err.message, rid: req.id });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
 
-// ─────────────────────  Server  ───────────────────────────────
-http.createServer({ keepAliveTimeout:10_000, headersTimeout:12_000 }, app)
-    .listen(API_PORT, ()=>log.info({ msg:`API listening on :${API_PORT}` }));
+app.get('/sol-price', async (_req, res) => {
+  try {
+    res.json({ price: await fetchSolPrice() });
+  } catch (err) {
+    log.error({ msg: 'Price error', error: err.message });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+app.post('/auto', (req, res) => {
+  try {
+    const p = schemaAuto.safeParse(req.body);
+    if (!p.success) return res.status(400).json({ error: 'invalid' });
+    res.json(toggleAuto(req.user, p.data.on));
+  } catch (err) {
+    log.error({ msg: 'Auto trading error', error: err.message, rid: req.id });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+app.post('/risk', (req, res) => {
+  try {
+    const p = schemaRisk.safeParse(req.body);
+    if (!p.success) return res.status(400).json({ error: 'invalid' });
+    res.json(setRisk(req.user, p.data.level));
+  } catch (err) {
+    log.error({ msg: 'Risk error', error: err.message, rid: req.id });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+app.post('/trade', async (req, res) => {
+  try {
+    const p = schemaTrade.safeParse(req.body);
+    if (!p.success) {
+      log.warn({
+        msg: 'Invalid trade data',
+        rid: req.id,
+        errors: p.error.errors
+      });
+      return res.status(400).json({ error: 'invalid' });
+    }
+    
+    const { side, mint, sol } = p.data;
+    await handleMessage({
+      handle: req.user,
+      button: side === 'buy' 
+        ? `BTN::QBUY::${mint}::${req.user}`
+        : `BTN::QSELL::${mint}::${req.user}`,
+      reply: () => {}
+    });
+    
+    res.json({ queued: true });
+  } catch (err) {
+    log.error({ msg: 'Trade error', error: err.message, rid: req.id });
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Health check
+app.get('/health', (_req, res) => {
+  res.json({ 
+    status: 'healthy',
+    uptime: process.uptime(),
+    timestamp: Date.now()
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  log.error({ 
+    msg: 'Unhandled error',
+    error: err.message,
+    stack: err.stack,
+    rid: req.id
+  });
+  res.status(500).json({ 
+    error: 'server_error',
+    details: 'An unexpected error occurred'
+  });
+});
+
+// Start server
+const server = http.createServer({ 
+  keepAliveTimeout: 10000,
+  headersTimeout: 12000 
+}, app);
+
+server.listen(env.API_PORT, () => {
+  log.info({ msg: `API listening on :${env.API_PORT}` });
+});

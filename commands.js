@@ -12,8 +12,13 @@ import {
   refreshBalances,
   NXR_MINT
 } from './utils-solana.js';
-import { getAllUsers, getUser, upsertUser, getWalletSecret, setWalletSecret } from './db.js';
-import { remember, recall } from './memory.js';
+import {
+    getAllUsers,
+    getUser,
+    upsertUser,
+    getWalletCompat,
+    setWalletSecret
+} from './db.js';import { remember, recall } from './memory.js';
 import { enqueueTrade } from './jobQueue.js';
 
 const users         = new Map();
@@ -87,42 +92,46 @@ export async function initializeUsers () {
     const handles = await getAllUsers();
   
     for (const handle of handles) {
+      // 1️⃣  Public profile --------------------------------------------------
       const data = await getUser(handle);
-      if (!data) continue;                               // sanity
+      if (!data) continue;                           // shouldn’t happen
   
-      let kp;
-      try {
-        const secret = await getWalletSecret(handle);    // → Uint8Array | null
-        if (secret && secret.byteLength === 64) {
-          kp = Keypair.fromSecretKey(secret);
-          secret.fill(0);                                // scrub
-        } else {
-          throw new Error('missing or malformed secret');
+      // 2️⃣  Wallet (encrypted / legacy) ------------------------------------
+      const { secret, legacyStr } = await getWalletCompat(handle);
+  
+      if (secret && secret.byteLength === 64) {
+        const kp = Keypair.fromSecretKey(secret);
+        secret.fill(0);                              // scrub the buffer
+  
+        // one‑time migration of legacy plain text → encrypted
+        if (legacyStr) {
+          await setWalletSecret(handle, legacyStr);
+          console.log(`[MIGRATE] ${handle}: wallet encrypted in Redis`);
         }
-      } catch (err) {
-        // 🛠  Auto‑repair: make a new wallet & persist the encrypted secret
-        console.warn(`[INIT] ${handle}: ${err.message} – generating new wallet`);
-        kp = Keypair.generate();
-        await setWalletSecret(handle, kp.secretKey);     // encrypt & store
+  
+        // hydrate in‑memory map --------------------------------------------
+        users.set(handle, {
+          wallet  : kp,
+          sol     : parseFloat(data.sol ?? '0'),
+          tierBal : parseFloat(data.tierBal ?? '0'),
+          auto    : data.auto === 'true',
+          risk    : data.risk ?? 'med'
+        });
+        continue;
       }
   
-      // hydrate working set
-      users.set(handle, {
-        wallet  : kp,
-        sol     : parseFloat(data.sol ?? '0'),
-        tierBal : parseFloat(data.tierBal ?? '0'),
-        auto    : data.auto === 'true',
-        risk    : data.risk ?? 'med'
-      });
+      // 3️⃣  No usable key → SKIP (we do **not** create a new one) ----------
+      console.warn(`[INIT] ${handle}: wallet missing or corrupt – SKIPPING (manual fix required)`);
     }
   
-    // begin live balance watcher
+    // 4️⃣  Live balance / deposit watcher -----------------------------------
     watchDeposits(users, AGENT_MINT_PK, async (handle, u) => {
       users.set(handle, u);
       await persist(handle, u);
+  
       if (u.auto && u.sol > 0.05) {
         await enqueueTrade({
-          cmd   : { t: 'sell', mint: 'So11111111111111111111111111111111111111112', sol: 0.02 },
+          cmd   : { t:'sell', mint:'So11111111111111111111111111111111111111112', sol:0.02 },
           handle
         });
       }
@@ -131,13 +140,12 @@ export async function initializeUsers () {
 
 // ─── Persist helper ───────────────────────────────────────────────────────
 async function persist(handle, u) {
-  await upsertUser(handle, {
-    wallet:  JSON.stringify(Array.from(u.wallet.secretKey)),
-    sol:     u.sol.toString(),
-    tierBal: u.tierBal.toString(),
-    auto:    u.auto.toString(),
-    risk:    u.risk
-  });
+    await upsertUser(handle, {
+        sol     : u.sol.toString(),
+        tierBal : u.tierBal.toString(),
+        auto    : u.auto.toString(),
+        risk    : u.risk
+    });
 }
 
 // ─── Ensure & basic getters ───────────────────────────────────────────────

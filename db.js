@@ -113,6 +113,33 @@ export async function getWalletSecret(handle) {
   return secret;
 }
 
+
+
+/**
+ * Compat helper:
+ *  - Returns { secret: Uint8Array|null, legacyStr: string|null }
+ *  - legacyStr is populated **only** if a plain text wallet string still exists.
+ */
+export async function getWalletCompat(handle) {
+  // Encrypted (preferred)
+  const enc = await redis.hget(`user:${handle}`, 'wallet');
+  if (enc && enc.startsWith('enc:')) {
+    const plain = decrypt(enc.slice(4));
+    const secret = Uint8Array.from(JSON.parse(plain.toString()));
+    plain.fill(0);
+    return { secret, legacyStr: null };
+  }
+
+  // Legacy plain‑text (JSON string) – keep for one‑time migration
+  if (enc) {
+    return { secret: null, legacyStr: enc };
+  }
+
+  return { secret: null, legacyStr: null };
+}
+
+
+
 /**
  * List all registered handles.
  */

@@ -19,7 +19,8 @@ const btn = (label, actionId, handle) =>
 
 export class TelegramClient {
   constructor() {
-    this.bot = new Telegraf(TOKEN, { handlerTimeout: 9_000 });
+    // preserve your original handler timeout
+    this.bot = new Telegraf(TOKEN, { handlerTimeout: 36_000 });
     this.me  = null;
 
     // Default stubs, to be overridden via setHelpers()
@@ -34,13 +35,12 @@ export class TelegramClient {
       toggleAuto:           () => ({ autoTrade: false, risk: 'balanced' }),
       setRisk:              () => ({ autoTrade: false, risk: 'balanced' }),
       generateLaunchConfig: async () => { throw new Error('generateLaunchConfig not set'); },
+      previewImage:         async () => null,
       launchToken:          async () => { throw new Error('launchToken not set'); },
     };
 
-    // Track users who chose Manual Launch mode
     this.awaitingManual = new Set();
-    // Store last AI‐generated config per user
-    this.lastConfigs = {};
+    this.lastConfigs    = {};
   }
 
   setHelpers(helpersObj) {
@@ -210,26 +210,48 @@ export class TelegramClient {
         case 'LAUNCH':
           return editOrReply(`*${name}, choose launch method:*`, TelegramClient.launchMenu(handle));
 
-        // ── AI-GENERATE CONFIG ───────────────────────────────────
+        // ── AI‐GENERATE CONFIG ───────────────────────────────────
         case 'AICFG': {
+          // indicate loading
           await editOrReply('🧠 Generating launch configuration via AI…', TelegramClient.launchMenu(handle));
-          try {
-            // call user‐provided helper
-            const cfg = await this.helpers.generateLaunchConfig(handle);
-            this.lastConfigs[handle] = cfg;
 
-            const json = JSON.stringify(cfg, null, 2);
-            const preview = `*Config generated:*\n\`\`\`json\n${json}\n\`\`\``;
+          try {
+            // get the full config (including env-driven vesting/raise)
+            const fullCfg = await this.helpers.generateLaunchConfig(handle);
+            this.lastConfigs[handle] = fullCfg;
+
+            // only show these fields in the JSON snippet
+            const previewCfg = {
+              decimals:  fullCfg.decimals,
+              supply:    fullCfg.supply,
+              tokenName: fullCfg.tokenName,
+              tokenMint: fullCfg.tokenMint,
+            };
+            const jsonSnippet = JSON.stringify(previewCfg, null, 2);
+
+            // fetch a preview image for the token
+            const imgUrl = await this.helpers.previewImage(fullCfg.tokenName);
+
+            // send photo + JSON + footer in one reply
+            const caption =
+              `*Config generated:*\n` +
+              '```json\n' + jsonSnippet + '\n```\n' +
+              `__`;
             const confirmMenu = Markup.inlineKeyboard([
               btn('✅ Confirm & Launch', 'LAUNCH_CONF', handle),
               btn('↩️ Back',             'LAUNCH',      handle),
             ], { columns: 2 });
 
-            return ctx.reply(preview, { parse_mode:'Markdown', ...confirmMenu });
+            return ctx.replyWithPhoto(imgUrl, {
+              caption,
+              parse_mode: 'Markdown',
+              ...confirmMenu,
+            });
           } catch (err) {
             return ctx.reply(`❌ Failed to generate config:\n${err.message}`, { parse_mode:'Markdown' });
           }
         }
+
         // ── CONFIRM & LAUNCH ────────────────────────────────────
         case 'LAUNCH_CONF': {
           const cfg = this.lastConfigs[handle];
@@ -245,11 +267,15 @@ export class TelegramClient {
               `• Pool Sig: \`${res.poolSignature}\`\n` +
               `• Logo: ${res.imageUrl}\n` +
               `• Metadata: ${res.website}`;
-            return ctx.reply(msg, { parse_mode:'Markdown' });
+            return ctx.replyWithPhoto(res.imageUrl, {
+              caption: msg,
+              parse_mode: 'Markdown'
+            });
           } catch (err) {
             return ctx.reply(`❌ Launch failed:\n${err.message}`, { parse_mode:'Markdown' });
           }
         }
+
         // ── MANUAL JSON INPUT ───────────────────────────────────
         case 'MANUAL': {
           await editOrReply('*Please send the launch configuration JSON now.*', TelegramClient.launchMenu(handle));
@@ -266,7 +292,7 @@ export class TelegramClient {
       const chatId = String(ctx.chat.id);
       let   text   = ctx.message.text;
 
-      // If expecting manual JSON from this user…
+      // If expecting manual JSON…
       if (this.awaitingManual.has(handle)) {
         this.awaitingManual.delete(handle);
         let cfg;
@@ -285,25 +311,26 @@ export class TelegramClient {
             `• Pool Sig: \`${res.poolSignature}\`\n` +
             `• Logo: ${res.imageUrl}\n` +
             `• Metadata: ${res.website}`;
-          return ctx.reply(msg, { parse_mode:'Markdown' });
+          return ctx.replyWithPhoto(res.imageUrl, {
+            caption: msg,
+            parse_mode: 'Markdown'
+          });
         } catch (err) {
           return ctx.reply(`❌ Launch failed:\n${err.message}`, { parse_mode:'Markdown' });
         }
       }
 
-      // Otherwise, ignore group chatter (unless bot is mentioned) and slash commands
+      // Ignore non-private chatter
       const hasMention = ctx.message.entities?.some(e => e.type === 'mention');
       if (ctx.chat.type !== 'private' && !hasMention && !text.startsWith('/')) return;
 
-      // Strip any @mention of the bot itself
-      if (this.me) {
-        text = text.replace(new RegExp(`@${this.me}`, 'ig'), '').trim();
-      }
+      // Strip bot mention
+      if (this.me) text = text.replace(new RegExp(`@${this.me}`, 'ig'), '').trim();
 
       this.helpers.ensureUser(handle);
       await this.helpers.saveChatId(handle, chatId);
 
-      // Hand off to your top‐level command handler
+      // Delegate to your main handler
       callback({
         platform: 'telegram',
         handle,

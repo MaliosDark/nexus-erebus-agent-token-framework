@@ -3,7 +3,11 @@ import 'dotenv/config';
 import { spawn } from 'child_process';
 import { TelegramClient } from './telegram-client.js';
 import { TwitterClient }  from './twitter-client.js';
-import { launchTokenInternal, generateLaunchConfig as launchConfigInternal } from './utils-launcher.js';
+import {
+  launchTokenInternal,
+  generateLaunchConfig as launchConfigInternal,
+  generateImage        as previewImage
+} from './utils-launcher.js';
 
 import {
   initializeUsers,
@@ -16,7 +20,6 @@ import {
   getPortfolio,
   recall as getHistory
 } from './commands.js';
-
 
 // ─── Spawn & monitor child services ───────────────────────────────
 function startService(name, script) {
@@ -36,16 +39,18 @@ startService('Metrics', 'metrics.js');
 startService('Worker',  'worker.js');
 startService('Launcher', 'launcher/server.js');
 
-
-// ─── Telegram + Twitter boot ──────────────────────────────────────
+// ─── Initialize users ─────────────────────────────────────────────
 await initializeUsers();
 
 const USE_TELEGRAM = process.env.USE_TELEGRAM !== 'false';
 const USE_TWITTER  = process.env.USE_TWITTER  === 'true';
 
-const tg = USE_TELEGRAM ? new TelegramClient() : null;
-const tw = USE_TWITTER  ? new TwitterClient()  : null;
+// ─── Instantiate clients ──────────────────────────────────────────
+// give TelegramClient a longer handler timeout for AI calls
+const tg = USE_TELEGRAM ? new TelegramClient({ handlerTimeout: 30_000 }) : null;
+const tw = USE_TWITTER  ? new TwitterClient()                        : null;
 
+// ─── Telegram setup ────────────────────────────────────────────────
 if (USE_TELEGRAM) {
   tg.setHelpers({
     walletOf,
@@ -53,32 +58,38 @@ if (USE_TELEGRAM) {
     fetchSolPrice,
     getPortfolio,
     getHistory,
-    ensureUser : handle => {},
+    ensureUser: handle => {},           // no-op stub
+    saveChatId: (handle, chatId) => {}, // wired in commands.js
     toggleAuto,
     setRisk,
-    saveChatId : (handle, chatId) => {}, // wired up in commands.js
     generateLaunchConfig: launchConfigInternal,
-    launchToken:          launchTokenInternal
+    launchToken:         launchTokenInternal,
+    previewImage,                        // ⚡ add previewImage helper
   });
   await tg.init(handleMessage);
   console.log('[BOOT] Telegram ON');
 }
 
-
+// ─── Twitter setup ─────────────────────────────────────────────────
 if (USE_TWITTER) {
   await tw.init();
   tw.setHelpers({ walletOf, balanceOf });
   tw.onMessage?.(twMsg => {
     handleMessage({
       platform: 'twitter',
-      handle  : twMsg.handle.toLowerCase(),
-      text    : twMsg.text,
-      reply   : txt => twMsg.reply(txt)
+      handle:   twMsg.handle.toLowerCase(),
+      text:     twMsg.text,
+      reply:    txt => twMsg.reply(txt)
     });
   });
   console.log('[BOOT] Twitter ON');
 }
 
-console.log(`[${process.env.AGENT_NAME}] ready → ${
-  [USE_TELEGRAM && 'Telegram', USE_TWITTER && 'Twitter'].filter(Boolean).join(' + ')
-}`);
+// ─── Final readiness log ───────────────────────────────────────────
+console.log(
+  `[${process.env.AGENT_NAME}] ready → ${
+    [USE_TELEGRAM && 'Telegram', USE_TWITTER && 'Twitter']
+      .filter(Boolean)
+      .join(' + ')
+  }`
+);

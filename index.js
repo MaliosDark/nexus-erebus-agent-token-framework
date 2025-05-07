@@ -3,6 +3,8 @@ import 'dotenv/config';
 import { spawn } from 'child_process';
 import { TelegramClient } from './telegram-client.js';
 import { TwitterClient }  from './twitter-client.js';
+import { launchTokenInternal } from './utils-launcher.js'
+
 import {
   initializeUsers,
   walletOf,
@@ -50,11 +52,12 @@ if (USE_TELEGRAM) {
     balanceOf,
     fetchSolPrice,
     getPortfolio,
-    getHistory,               // use the imported alias
-    ensureUser : handle => {},         // not needed here
+    getHistory,
+    ensureUser : handle => {},
     toggleAuto,
     setRisk,
-    saveChatId : (handle, chatId) => {} // wired up in commands.js
+    saveChatId : (handle, chatId) => {}, // wired up in commands.js
+    launchToken: launchTokenInternal
   });
   await tg.init(handleMessage);
   console.log('[BOOT] Telegram ON');

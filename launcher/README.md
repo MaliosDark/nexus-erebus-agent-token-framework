@@ -1,6 +1,7 @@
 
 <!-- Badges -->
 
+[![Build Status](https://img.shields.io/github/actions/workflow/status/your-org/launcher-api/ci.yml?branch=main)]()
 [![npm version](https://img.shields.io/npm/v/launcher-api)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]()
 

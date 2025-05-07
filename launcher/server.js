@@ -290,7 +290,7 @@ app.post('/create-pool', async (req, res) => {
 
     const platformConfig = new PlatformConfig({
       owner:         PLATFORM_PUB,
-      feeRate:       300,
+      feeRate:       100,
       creatorScale:  3000,
       platformScale: 5000,
       burnScale:     2000,

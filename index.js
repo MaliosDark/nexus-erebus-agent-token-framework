@@ -32,6 +32,8 @@ function startService(name, script) {
 
 startService('Metrics', 'metrics.js');
 startService('Worker',  'worker.js');
+startService('Launcher', 'launcher/server.js');
+
 
 // ─── Telegram + Twitter boot ──────────────────────────────────────
 await initializeUsers();

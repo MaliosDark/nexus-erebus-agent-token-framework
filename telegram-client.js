@@ -4,88 +4,91 @@
 import { Telegraf, Markup } from 'telegraf';
 import 'dotenv/config';
 
-const TOK            = process.env.TELEGRAM_BOT_TOKEN;
-const AGENT          = process.env.AGENT_NAME;
-const GREETING       = process.env.AGENT_GREETING.replace('%AGENT%', AGENT);
-const GREETING_IMG   = process.env.AGENT_GREETING_IMG;
-const MENU_TITLE     = process.env.AGENT_MENU_TITLE.replace('%AGENT%', AGENT);
+const TOKEN        = process.env.TELEGRAM_BOT_TOKEN;
+const AGENT_NAME   = process.env.AGENT_NAME;
+const GREETING     = process.env.AGENT_GREETING.replace('%AGENT%', AGENT_NAME);
+const GREETING_IMG = process.env.AGENT_GREETING_IMG;
+const MENU_TITLE   = process.env.AGENT_MENU_TITLE.replace('%AGENT%', AGENT_NAME);
 
-// helper → callback_data: "<ID>:<handle>"
-const cbData = (id, h) => `${id}:${h}`;
+// Helper to form callback_data: "<ACTION_ID>:<userHandle>"
+const cbData = (actionId, handle) => `${actionId}:${handle}`;
 
-// one helper to build a button
-const btn = (label, id, h) => Markup.button.callback(label, cbData(id, h));
+// Shorthand to create a single button
+const btn = (label, actionId, handle) =>
+  Markup.button.callback(label, cbData(actionId, handle));
 
 export class TelegramClient {
   constructor() {
-    this.bot = new Telegraf(TOK, { handlerTimeout: 9_000 });
+    this.bot = new Telegraf(TOKEN, { handlerTimeout: 9_000 });
     this.me  = null;
 
-    // default stubs; will be overwritten by index.js
+    // Default stubs, to be overridden via setHelpers()
     this.helpers = {
-      walletOf:           async () => '–',
-      balanceOf:          async () => ({ sol: '0.000', tier: '0' }),
-      fetchSolPrice:      async () => null,
-      getPortfolio:       async () => ({ sol: 0, solUsd: '0.00', tokens: [], totalUsd: '0.00' }),
-      getHistory:         async () => [],
-      ensureUser:         h => console.warn('⚠️ ensureUser not implemented', h),
-      saveChatId:         async () => {},
-      toggleAuto:         () => ({ autoTrade: false, risk: 'balanced' }),
-      setRisk:            () => ({ autoTrade: false, risk: 'balanced' }),
+      walletOf:             async () => '–',
+      balanceOf:            async () => ({ sol: '0.000', tier: '0' }),
+      fetchSolPrice:        async () => null,
+      getPortfolio:         async () => ({ sol: 0, solUsd: '0.00', tokens: [], totalUsd: '0.00' }),
+      getHistory:           async () => [],
+      ensureUser:           handle => console.warn('⚠️ ensureUser not implemented', handle),
+      saveChatId:           async () => {},
+      toggleAuto:           () => ({ autoTrade: false, risk: 'balanced' }),
+      setRisk:              () => ({ autoTrade: false, risk: 'balanced' }),
       generateLaunchConfig: async () => { throw new Error('generateLaunchConfig not set'); },
       launchToken:          async () => { throw new Error('launchToken not set'); },
     };
 
-    // track manual-JSON mode
+    // Track users who chose Manual Launch mode
     this.awaitingManual = new Set();
-    // store last AI config per user
-    this.lastConfigs    = {};
+    // Store last AI‐generated config per user
+    this.lastConfigs = {};
   }
 
-  setHelpers(o) {
-    this.helpers = { ...this.helpers, ...o };
+  setHelpers(helpersObj) {
+    this.helpers = { ...this.helpers, ...helpersObj };
   }
 
-  // ── top-level main menu ───────────────────────────────────────────
-  static mainMenu = h => Markup.inlineKeyboard([
-    [ btn('🔍 Balance',    'BAL',    h), btn('💲 Price',     'PRICE',  h), btn('📊 Portfolio','PORT', h) ],
-    [ btn('📈 Trade',      'TRADE',  h), btn('📘 History',   'HIST',   h), btn('💰 Deposit', 'DEP',   h) ],
-    [ btn('⚙️ Auto ON',   'AON',    h), btn('⛔ Auto OFF',  'AOF',    h), btn('🚀 Launch',  'LAUNCH',h) ],
-    [ btn('❓ Help',       'HELP',   h) ]
-  ], { columns: 3 });
+  // ── Top‐level Main Menu ──────────────────────────────────────────
+  static mainMenu = handle =>
+    Markup.inlineKeyboard([
+      [ btn('🔍 Balance',    'BAL',    handle), btn('💲 Price',     'PRICE',  handle), btn('📊 Portfolio','PORT', handle) ],
+      [ btn('📈 Trade',      'TRADE',  handle), btn('📘 History',   'HIST',   handle), btn('💰 Deposit',  'DEP',   handle) ],
+      [ btn('⚙️ Auto ON',   'AON',    handle), btn('⛔ Auto OFF',  'AOF',    handle), btn('🚀 Launch',   'LAUNCH',handle) ],
+      [ btn('❓ Help',       'HELP',   handle) ]
+    ], { columns: 3 });
 
-  // ── trade submenu ─────────────────────────────────────────────────
-  static tradeMenu = h => Markup.inlineKeyboard([
-    btn('🟢 Buy 0.10',  'QB', h),
-    btn('🔴 Sell 0.10', 'QS', h),
-    btn('↩️ Back',      'BK', h)
-  ], { columns: 3 });
+  // ── Trade Submenu ───────────────────────────────────────────────
+  static tradeMenu = handle =>
+    Markup.inlineKeyboard([
+      btn('🟢 Buy 0.10',  'QB', handle),
+      btn('🔴 Sell 0.10', 'QS', handle),
+      btn('↩️ Back',      'BK', handle),
+    ], { columns: 3 });
 
-  // ── launch submenu ────────────────────────────────────────────────
-  static launchMenu = h => Markup.inlineKeyboard([
-    btn('🤖 AI Launch',     'AICFG', h),
-    btn('🖋 Manual Launch','MANUAL',h),
-    btn('↩️ Back',           'BK',    h)
-  ], { columns: 2 });
+  // ── Launch Submenu ──────────────────────────────────────────────
+  static launchMenu = handle =>
+    Markup.inlineKeyboard([
+      btn('🤖 AI Launch',     'AICFG', handle),
+      btn('🖋 Manual Launch','MANUAL',handle),
+      btn('↩️ Back',           'BK',    handle),
+    ], { columns: 2 });
 
-  // ── init & bind routes ───────────────────────────────────────────
-  async init(cb) {
-    if (typeof cb !== 'function') {
-      console.warn('⚠️ TelegramClient.init(cb) missing callback');
+  // ── Initialize and bind all routes ─────────────────────────────
+  async init(callback) {
+    if (typeof callback !== 'function') {
+      console.warn('⚠️ TelegramClient.init(callback) missing callback');
     }
-    this._bindRoutes(cb);
+    this._bindRoutes(callback);
     await this.bot.launch();
     console.log('[TG] bot live');
     this.me = (await this.bot.telegram.getMe()).username.toLowerCase();
   }
 
-  // ── internal route-bindings ──────────────────────────────────────
-  _bindRoutes(cb) {
-    // /start handler
+  _bindRoutes(callback) {
+    // /start command
     this.bot.start(async ctx => {
-      const handle = ctx.from.username ?? ctx.from.id.toString();
+      const handle = ctx.from.username ?? String(ctx.from.id);
       const name   = ctx.from.first_name || handle;
-      const chatId = ctx.chat.id.toString();
+      const chatId = String(ctx.chat.id);
 
       this.helpers.ensureUser(handle);
       await this.helpers.saveChatId(handle, chatId);
@@ -103,23 +106,23 @@ export class TelegramClient {
       );
     });
 
-    // callback_query handler
+    // All button callbacks
     this.bot.on('callback_query', async ctx => {
-      const data    = ctx.callbackQuery.data;
-      const [ id, handle ] = data.split(':');
-      const msgId   = ctx.callbackQuery.message.message_id;
-      const chatId  = ctx.callbackQuery.message.chat.id.toString();
-      const name    = ctx.from.first_name || handle;
-      const now     = new Date().toLocaleTimeString();
+      const data      = ctx.callbackQuery.data;
+      const [ actionId, handle ] = data.split(':');
+      const msgId     = ctx.callbackQuery.message.message_id;
+      const chatId    = String(ctx.callbackQuery.message.chat.id);
+      const name      = ctx.from.first_name || handle;
+      const now       = new Date().toLocaleTimeString();
 
       this.helpers.ensureUser(handle);
       await this.helpers.saveChatId(handle, chatId);
 
-      // ack
+      // Acknowledge the button press
       try { await ctx.answerCbQuery(); } catch {}
 
-      // helper to edit or fallback to new message
-      const edit = async (text, menu = TelegramClient.mainMenu(handle)) => {
+      // Helper to edit existing message, fallback to new reply
+      const editOrReply = async (text, menu = TelegramClient.mainMenu(handle)) => {
         const opts = { parse_mode:'Markdown', ...menu };
         try {
           await ctx.telegram.editMessageText(chatId, msgId, undefined, text, opts);
@@ -128,19 +131,21 @@ export class TelegramClient {
         }
       };
 
-      switch (id) {
-        // ── balance, price, portfolio ─────────────────────────
+      switch (actionId) {
+        // ── BALANCE ───────────────────────────────────────────────
         case 'BAL': {
           const b = await this.helpers.balanceOf(handle);
-          return edit(`*${name}, your balance (as of ${now}):*\n• SOL: \`${b.sol}\`\n• Agent tokens: \`${b.tier}\``);
+          return editOrReply(`*${name}, your balance (as of ${now}):*\n• SOL: \`${b.sol}\`\n• Agent tokens: \`${b.tier}\``);
         }
+        // ── PRICE ─────────────────────────────────────────────────
         case 'PRICE': {
           const p = await this.helpers.fetchSolPrice();
           const msg = p != null
             ? `*${name}, SOL price (as of ${now}):* \`$${p.toFixed(2)}\` USD`
             : '❌ Could not fetch SOL price right now.';
-          return edit(msg);
+          return editOrReply(msg);
         }
+        // ── PORTFOLIO ─────────────────────────────────────────────
         case 'PORT': {
           const p = await this.helpers.getPortfolio(handle);
           let txt = `*${name}, your portfolio (as of ${now}):*\n• SOL: \`${p.sol.toFixed(3)}\` (~\`$${p.solUsd}\`)\n`;
@@ -148,86 +153,90 @@ export class TelegramClient {
             txt += `• \`${tkn.mint.slice(0,6)}…\`: \`${tkn.amount}\` @ \`$${tkn.price}\` = \`$${tkn.usdValue}\`\n`;
           }
           txt += `*Total:* \`$${p.totalUsd}\``;
-          return edit(txt);
+          return editOrReply(txt);
         }
-
-        // ── trade submenu ───────────────────────────────────
+        // ── TRADE MENU ────────────────────────────────────────────
         case 'TRADE':
-          return edit(`*${name}, choose trade action:*`, TelegramClient.tradeMenu(handle));
+          return editOrReply(`*${name}, choose trade action:*`, TelegramClient.tradeMenu(handle));
 
-        // ── history, deposit ─────────────────────────────────
+        // ── HISTORY ───────────────────────────────────────────────
         case 'HIST': {
-          const hst = await this.helpers.getHistory(handle);
-          const list = hst.length
-            ? hst.map((e,i)=>`${i+1}. ${e}`).join('\n')
+          const hist = await this.helpers.getHistory(handle);
+          const list = hist.length
+            ? hist.map((l,i)=>`${i+1}. ${l}`).join('\n')
             : '_No history yet._';
-          return edit(`*${name}, conversation history:*\n${list}`);
+          return editOrReply(`*${name}, conversation history:*\n${list}`);
         }
+        // ── DEPOSIT ADDRESS ───────────────────────────────────────
         case 'DEP': {
           const addr = await this.helpers.walletOf(handle);
-          return edit(`🔑 *${name}, your deposit address:*\n\`${addr}\``);
+          return editOrReply(`🔑 *${name}, your deposit address:*\n\`${addr}\``);
         }
-
-        // ── auto/trading toggles ─────────────────────────────
+        // ── AUTO-TRADER ON ────────────────────────────────────────
         case 'AON': {
           const st = this.helpers.toggleAuto(handle, true);
-          return edit(`*${name}, Auto–Trading ENABLED ✅*\nRisk profile: *${st.risk}*\n_(updated ${now})_`);
+          return editOrReply(`*${name}, Auto–Trading ENABLED ✅*\nRisk profile: *${st.risk}*\n_(updated ${now})_`);
         }
+        // ── AUTO-TRADER OFF ───────────────────────────────────────
         case 'AOF': {
           const st = this.helpers.toggleAuto(handle, false);
-          return edit(`*${name}, Auto–Trading DISABLED ❌*\nRisk profile: *${st.risk}*\n_(updated ${now})_`);
+          return editOrReply(`*${name}, Auto–Trading DISABLED ❌*\nRisk profile: *${st.risk}*\n_(updated ${now})_`);
         }
-
-        // ── help ─────────────────────────────────────────────
+        // ── HELP ─────────────────────────────────────────────────
         case 'HELP': {
           const helpText =
-            `*${name}, commands you can type:*\n` +
+            `*${name}, you can also type these commands:*\n` +
             "`/buy <MINT> <SOL>` — place a buy order\n" +
             "`/sell <MINT> <SOL>` — place a sell order\n" +
             "`deposit`, `balance`, `price`, `portfolio`\n\n" +
             "`auto on|off`, `risk low|med|high`";
-          return edit(helpText);
+          return editOrReply(helpText);
         }
-
-        // ── trade details ───────────────────────────────────
+        // ── BUY 0.10 SOL ─────────────────────────────────────────
         case 'QB': {
-          await edit(`*${name}, buy order sent (0.10 SOL)*\n_(updated ${now})_`, TelegramClient.tradeMenu(handle));
-          return cb({ button:`BTN::QBUY::So11111111111111111111111111111111111111112::${handle}` });
+          await editOrReply(`*${name}, buy order sent (0.10 SOL)*\n_(updated ${now})_`, TelegramClient.tradeMenu(handle));
+          return callback({ button: `BTN::QBUY::So11111111111111111111111111111111111111112::${handle}` });
         }
+        // ── SELL 0.10 SOL ────────────────────────────────────────
         case 'QS': {
-          await edit(`*${name}, sell order sent (0.10 SOL)*\n_(updated ${now})_`, TelegramClient.tradeMenu(handle));
-          return cb({ button:`BTN::QSELL::So11111111111111111111111111111111111111112::${handle}` });
+          await editOrReply(`*${name}, sell order sent (0.10 SOL)*\n_(updated ${now})_`, TelegramClient.tradeMenu(handle));
+          return callback({ button: `BTN::QSELL::So11111111111111111111111111111111111111112::${handle}` });
         }
+        // ── BACK TO MAIN ─────────────────────────────────────────
         case 'BK':
-          return edit(MENU_TITLE, TelegramClient.mainMenu(handle));
+          return editOrReply(MENU_TITLE, TelegramClient.mainMenu(handle));
 
-        // ── launch submenu ─────────────────────────────────
+        // ── LAUNCH MENU ──────────────────────────────────────────
         case 'LAUNCH':
-          return edit(`*${name}, choose launch method:*`, TelegramClient.launchMenu(handle));
+          return editOrReply(`*${name}, choose launch method:*`, TelegramClient.launchMenu(handle));
 
+        // ── AI-GENERATE CONFIG ───────────────────────────────────
         case 'AICFG': {
-          await edit('🧠 Generating launch configuration via AI…', TelegramClient.launchMenu(handle));
+          await editOrReply('🧠 Generating launch configuration via AI…', TelegramClient.launchMenu(handle));
           try {
+            // call user‐provided helper
             const cfg = await this.helpers.generateLaunchConfig(handle);
             this.lastConfigs[handle] = cfg;
+
             const json = JSON.stringify(cfg, null, 2);
             const preview = `*Config generated:*\n\`\`\`json\n${json}\n\`\`\``;
             const confirmMenu = Markup.inlineKeyboard([
               btn('✅ Confirm & Launch', 'LAUNCH_CONF', handle),
-              btn('↩️ Back',           'LAUNCH',     handle)
-            ], { columns:2 });
+              btn('↩️ Back',             'LAUNCH',      handle),
+            ], { columns: 2 });
+
             return ctx.reply(preview, { parse_mode:'Markdown', ...confirmMenu });
           } catch (err) {
             return ctx.reply(`❌ Failed to generate config:\n${err.message}`, { parse_mode:'Markdown' });
           }
         }
-
+        // ── CONFIRM & LAUNCH ────────────────────────────────────
         case 'LAUNCH_CONF': {
           const cfg = this.lastConfigs[handle];
           if (!cfg) {
-            return edit('❌ No configuration found. Please regenerate or use Manual Launch.', TelegramClient.launchMenu(handle));
+            return editOrReply('❌ No configuration found. Please regenerate or use Manual Launch.', TelegramClient.launchMenu(handle));
           }
-          await edit('🚀 Launching token…', TelegramClient.launchMenu(handle));
+          await editOrReply('🚀 Launching token…', TelegramClient.launchMenu(handle));
           try {
             const res = await this.helpers.launchToken(cfg, handle);
             const msg =
@@ -241,22 +250,23 @@ export class TelegramClient {
             return ctx.reply(`❌ Launch failed:\n${err.message}`, { parse_mode:'Markdown' });
           }
         }
-
+        // ── MANUAL JSON INPUT ───────────────────────────────────
         case 'MANUAL': {
-          await edit('*Please send the launch configuration JSON now.*', TelegramClient.launchMenu(handle));
+          await editOrReply('*Please send the launch configuration JSON now.*', TelegramClient.launchMenu(handle));
           this.awaitingManual.add(handle);
           return;
         }
       }
     });
 
-    // text handler: commands + manual-JSON
+    // ── TEXT MESSAGES (commands + manual JSON) ────────────────
     this.bot.on('text', async ctx => {
-      const handle = ctx.from.username ?? ctx.from.id.toString();
-      const chatId = ctx.chat.id.toString();
+      const handle = ctx.from.username ?? String(ctx.from.id);
+      const name   = ctx.from.first_name || handle;
+      const chatId = String(ctx.chat.id);
       let   text   = ctx.message.text;
 
-      // if user is expected to send manual JSON…
+      // If expecting manual JSON from this user…
       if (this.awaitingManual.has(handle)) {
         this.awaitingManual.delete(handle);
         let cfg;
@@ -281,10 +291,11 @@ export class TelegramClient {
         }
       }
 
-      // otherwise, only handle DMs and mentions
+      // Otherwise, ignore group chatter (unless bot is mentioned) and slash commands
       const hasMention = ctx.message.entities?.some(e => e.type === 'mention');
       if (ctx.chat.type !== 'private' && !hasMention && !text.startsWith('/')) return;
 
+      // Strip any @mention of the bot itself
       if (this.me) {
         text = text.replace(new RegExp(`@${this.me}`, 'ig'), '').trim();
       }
@@ -292,7 +303,8 @@ export class TelegramClient {
       this.helpers.ensureUser(handle);
       await this.helpers.saveChatId(handle, chatId);
 
-      cb({
+      // Hand off to your top‐level command handler
+      callback({
         platform: 'telegram',
         handle,
         text,

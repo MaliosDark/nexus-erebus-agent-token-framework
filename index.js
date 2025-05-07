@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { spawn } from 'child_process';
 import { TelegramClient } from './telegram-client.js';
 import { TwitterClient }  from './twitter-client.js';
-import { launchTokenInternal } from './utils-launcher.js'
+import { launchTokenInternal, generateLaunchConfig as launchConfigInternal } from './utils-launcher.js';
 
 import {
   initializeUsers,
@@ -57,7 +57,8 @@ if (USE_TELEGRAM) {
     toggleAuto,
     setRisk,
     saveChatId : (handle, chatId) => {}, // wired up in commands.js
-    launchToken: launchTokenInternal
+    generateLaunchConfig: launchConfigInternal,
+    launchToken:          launchTokenInternal
   });
   await tg.init(handleMessage);
   console.log('[BOOT] Telegram ON');

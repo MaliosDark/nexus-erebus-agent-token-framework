@@ -1,22 +1,22 @@
 // utils-launcher.js — internal integration of the Launcher API
-import 'dotenv/config'
-import bs58 from 'bs58'
-import fetch from 'node-fetch'
-import FormData from 'form-data'
-import { createClient } from 'redis'
+import 'dotenv/config';
+import bs58 from 'bs58';
+import fetch from 'node-fetch';
+import FormData from 'form-data';
+import { createClient } from 'redis';
 import {
   Connection,
   PublicKey,
   Keypair,
   sendAndConfirmTransaction,
-} from '@solana/web3.js'
+} from '@solana/web3.js';
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
   mintTo,
-} from '@solana/spl-token'
-import raydiumSdk from '@raydium-io/raydium-sdk-v2'
-import { firewall } from './firewall.js'
+} from '@solana/spl-token';
+import raydiumSdk from '@raydium-io/raydium-sdk-v2';
+import { firewall } from './firewall.js';
 
 const {
   RPC_URL,
@@ -26,87 +26,157 @@ const {
   IMAGE_API_ROOT,
   METADATA_BASE_URL,
   BONDING_CURVE,
-} = process.env
+  OLLAMA_URL,
+  OLLAMA_MODEL,
+} = process.env;
 
-// Redis + Solana init
-const redis     = createClient({ url: REDIS_URL })
-redis.connect().catch(err => { throw err })
-const connection = new Connection(RPC_URL, 'confirmed')
+// ── Redis + Solana initialization ───────────────────────────────────
+const redis = createClient({ url: REDIS_URL });
+redis.connect().catch(err => { throw err; });
+const connection = new Connection(RPC_URL, 'confirmed');
 
-// Platform keypair
-let PLATFORM_KP
-const raw = PLATFORM_PRIVATE_KEY.trim()
-if (raw.startsWith('[')) {
-  PLATFORM_KP = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)))
+// ── Platform keypair from env (Base58 or JSON array) ────────────────
+let PLATFORM_KP;
+const rawKey = PLATFORM_PRIVATE_KEY.trim();
+if (rawKey.startsWith('[')) {
+  PLATFORM_KP = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(rawKey)));
 } else {
-  PLATFORM_KP = Keypair.fromSecretKey(bs58.decode(raw))
+  PLATFORM_KP = Keypair.fromSecretKey(bs58.decode(rawKey));
 }
-const PLATFORM_PUB = PLATFORM_KP.publicKey
+const PLATFORM_PUB = PLATFORM_KP.publicKey;
 
-// Curve
-const { Curve, PlatformConfig, createLaunchpadPool, TxVersion } = raydiumSdk
+// ── Raydium bonding curve config ────────────────────────────────────
+const {
+  Curve,
+  PlatformConfig,
+  createLaunchpadPool,
+  TxVersion
+} = raydiumSdk;
 const CURVE_TYPE = {
   LINEAR:      Curve.Linear,
   EXPONENTIAL: Curve.Exponential,
   LOGARITHMIC: Curve.Logarithmic,
-}[BONDING_CURVE] || Curve.Linear
+}[BONDING_CURVE] || Curve.Linear;
 
-// Aux: genera logo
+// ── Helper: generate a logo via external image API ─────────────────
 async function generateImage(prompt) {
-  const fd = new FormData()
-  fd.append('texto', prompt)
-  const res = await fetch(`${IMAGE_API_ROOT}/obtener_imagen`, { method:'POST', body:fd })
+  const fd = new FormData();
+  fd.append('texto', prompt);
+  const res = await fetch(`${IMAGE_API_ROOT}/obtener_imagen`, {
+    method: 'POST',
+    body: fd
+  });
   if (!res.ok) {
-    const msg = `Image API ${res.statusText}`
-    firewall.onError(msg)
-    throw new Error(msg)
+    const msg = `Image API ${res.statusText}`;
+    firewall.onError(msg);
+    throw new Error(msg);
   }
-  const filename = (await res.text()).split('/').pop()
-  return `${IMAGE_API_ROOT}/images/${filename}`
+  const filename = (await res.text()).split('/').pop();
+  return `${IMAGE_API_ROOT}/images/${filename}`;
+}
+
+// ── AI‐powered helper: generate Raydium launch parameters via Ollama ─
+export async function generateLaunchConfig(userId) {
+  const prompt = `
+You are a Raydium Launchpad configuration generator.
+Given the user handle "${userId}", output exactly one JSON object with the following integer or string fields:
+  - decimals
+  - supply
+  - tokenName
+  - tokenBMint
+  - totalRaiseB
+  - cliffPeriod
+  - unlockPeriod
+  - startDelay
+
+Respond with nothing but the raw JSON object.
+`.trim();
+
+  const body = {
+    model: OLLAMA_MODEL,
+    prompt,
+    stream: false
+  };
+
+  const res = await fetch(OLLAMA_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const { response } = await res.json();
+  try {
+    return JSON.parse(response.trim());
+  } catch (err) {
+    throw new Error(`Invalid JSON from AI: ${response}`);
+  }
 }
 
 /**
- * Lanza token + pool todo en Devnet **interno**
- * @param params  { decimals, supply, tokenName, tokenBMint, totalRaiseB, cliffPeriod, unlockPeriod, startDelay }
- * @param userId  string   handle del usuario
+ * Mint a new SPL token and create a Raydium Launchpad pool.
+ * @param params {
+ *   decimals: number,
+ *   supply: number,
+ *   tokenName: string,
+ *   tokenBMint: string,
+ *   totalRaiseB: number,
+ *   cliffPeriod: number,
+ *   unlockPeriod: number,
+ *   startDelay: number
+ * }
+ * @param userId  string  user handle
  */
 export async function launchTokenInternal(params, userId) {
-  // 1) Obtén Keypair del usuario
-  const j = await redis.get(`wallet:${userId}`)
-  if (!j) {
-    firewall.onError(`Wallet not found for ${userId}`)
-    throw new Error('Wallet not found')
+  // 1) Load user's Keypair from Redis
+  const walletJson = await redis.get(`wallet:${userId}`);
+  if (!walletJson) {
+    firewall.onError(`Wallet not found for ${userId}`);
+    throw new Error('Wallet not found');
   }
-  const userKP = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(j)))
+  const userKP = Keypair.fromSecretKey(
+    Uint8Array.from(JSON.parse(walletJson))
+  );
 
-  // 2) Mint SPL token + metadata
-  const mint = await createMint(connection, userKP, userKP.publicKey, null, params.decimals)
-  const ata  = await getOrCreateAssociatedTokenAccount(
-    connection, userKP, mint, userKP.publicKey
-  )
+  // 2) Mint SPL token and initial supply
+  const mint = await createMint(
+    connection,
+    userKP,
+    userKP.publicKey,
+    null,
+    params.decimals
+  );
+  const ata = await getOrCreateAssociatedTokenAccount(
+    connection,
+    userKP,
+    mint,
+    userKP.publicKey
+  );
   await mintTo(
-    connection, userKP,
-    mint, ata.address, userKP,
+    connection,
+    userKP,
+    mint,
+    ata.address,
+    userKP,
     params.supply * 10 ** params.decimals
-  )
+  );
 
-  const imageUrl = await generateImage(`Logo for ${params.tokenName}`)
-  const website  = `${METADATA_BASE_URL}/token/${mint.toBase58()}`
+  // 3) Generate logo and metadata
+  const imageUrl = await generateImage(`Logo for ${params.tokenName}`);
+  const website  = `${METADATA_BASE_URL}/token/${mint.toBase58()}`;
   await redis.hSet(`tokenmeta:${mint.toBase58()}`, {
     name:    params.tokenName,
     image:   imageUrl,
     website,
-  })
+  });
 
-  // 3) Crear pool en Raydium
+  // 4) Create Raydium Launchpad pool
   const platformConfig = new PlatformConfig({
     owner:         PLATFORM_PUB,
     feeRate:       300,
     creatorScale:  6000,
     platformScale: 2500,
     burnScale:     1500,
-  })
-  const now = Math.floor(Date.now()/1000)
+  });
+  const now = Math.floor(Date.now() / 1000);
   const poolParams = {
     tokenAMint:        mint,
     tokenBMint:        new PublicKey(params.tokenBMint),
@@ -122,7 +192,7 @@ export async function launchTokenInternal(params, userId) {
     platformFeeRate:   300,
     migrateType:       'cpmm',
     curveType:         CURVE_TYPE,
-  }
+  };
 
   const tx = await createLaunchpadPool({
     connection,
@@ -131,8 +201,8 @@ export async function launchTokenInternal(params, userId) {
     platformConfig,
     programId:   new PublicKey(LAUNCHPAD_PROGRAM),
     txVersion:   TxVersion.V0,
-  })
-  const poolSignature = await sendAndConfirmTransaction(connection, tx, [ userKP ])
+  });
+  const poolSignature = await sendAndConfirmTransaction(connection, tx, [userKP]);
 
   return {
     mint:          mint.toBase58(),
@@ -140,5 +210,5 @@ export async function launchTokenInternal(params, userId) {
     imageUrl,
     website,
     poolSignature,
-  }
+  };
 }

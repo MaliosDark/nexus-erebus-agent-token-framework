@@ -205,9 +205,6 @@ flowchart LR
 
 ---
 
-Thought for a couple of seconds
-
-
 ## 🖥 Secure REST API Gateway
 
 A “paranoid-mode” Express service (`api-server.js`) that runs alongside the agent in Docker Compose. It exposes only safe HTTP endpoints for your React/Next front-end to:
